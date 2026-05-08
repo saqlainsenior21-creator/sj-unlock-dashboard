@@ -821,7 +821,7 @@ const App: React.FC = () => {
             </div>
             <div className="sidebar-user-actions">
               <div className="theme-toggle-sm" onClick={() => setIsDarkMode(!isDarkMode)} title="Toggle theme">{isDarkMode ? <Sun size={14} /> : <Moon size={14} />}</div>
-              <LogOut size={14} className="logout-icon" onClick={handleLogout} title="Sign out" />
+              <LogOut size={14} className="logout-icon" onClick={handleLogout} />
             </div>
           </div>
         </div>
