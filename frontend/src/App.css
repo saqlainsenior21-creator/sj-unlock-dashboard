@@ -30,17 +30,13 @@ body.light-mode {
   --shadow-hover: 0 8px 24px -4px rgba(0,0,0,0.12);
 }
 
-html, body {
-  height: 100%;
-  overflow: hidden;
-}
-
 body {
   margin: 0;
   padding: 0;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background-color: var(--bg-dark);
   color: var(--text-primary);
+  min-height: 100vh;
   transition: background-color 0.3s, color 0.3s;
   -webkit-font-smoothing: antialiased;
 }
@@ -908,8 +904,7 @@ input:focus {
 
 .dashboard-layout {
   display: flex;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
   background: var(--bg-dark);
 }
 
@@ -925,6 +920,8 @@ input:focus {
   top: 0; left: 0; bottom: 0;
   z-index: 100;
   overflow-y: auto;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .sidebar-logo {
@@ -1119,8 +1116,7 @@ input:focus {
   margin-left: 240px;
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow-y: auto;
+  min-height: 100vh;
 }
 
 .page-topbar {
@@ -1133,6 +1129,7 @@ input:focus {
   position: sticky;
   top: 0;
   z-index: 50;
+  will-change: transform;
 }
 .page-breadcrumb {
   display: flex;
