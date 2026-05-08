@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const API_URL = 'http://localhost:3005';
+const API_URL = '';
 const socket = io({ path: '/socket.io', transports: ['polling'] });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
