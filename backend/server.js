@@ -244,6 +244,21 @@ const SERVICE_CATALOGUE = [
   console.log(`Service catalogue synced (${SERVICE_CATALOGUE.length} services)`);
 }
 
+// ─── Auto-seed admin account ──────────────────────────────────────────────────
+async function seedAdmin() {
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+  if (!ADMIN_PASSWORD) return;
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(ADMIN_EMAIL);
+  if (existing) return;
+  const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+  db.prepare('INSERT INTO users (email, password, balance, role) VALUES (?, ?, 0, ?)').run(ADMIN_EMAIL, hash, 'admin');
+  db.prepare('INSERT INTO subscriptions (user_id, plan, status) VALUES (?, ?, ?)').run(
+    db.prepare('SELECT id FROM users WHERE email = ?').get(ADMIN_EMAIL).id, 'enterprise', 'active'
+  );
+  console.log('[Seed] Admin account created:', ADMIN_EMAIL);
+}
+seedAdmin().catch(console.error);
+
 // ─── UnlockBase API helpers ───────────────────────────────────────────────────
 // Sign up at https://www.unlockbase.com/resellers/ to get your API key and service IDs
 async function submitToUnlockBase(apiServiceId, imei) {
