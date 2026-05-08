@@ -45,7 +45,8 @@ if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_SECRET_KEY.startsWith('
 }
 
 // ─── Database ────────────────────────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'enterprise.db'));
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'enterprise.db');
+const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
 db.exec(`
