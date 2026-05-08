@@ -340,6 +340,10 @@ const App: React.FC = () => {
   const [balanceInputs, setBalanceInputs] = useState<Record<number, string>>({});
   const [subDays, setSubDays] = useState<Record<number, string>>({});
 
+  // Sidebar collapse state
+  const [orderMenuOpen, setOrderMenuOpen] = useState(false);
+  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
+
   // Hash-based auto-login (for testing: navigate to /#token=JWT)
   useEffect(() => {
     const hash = window.location.hash;
@@ -743,66 +747,97 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="app-container">
+    <div className={`dashboard-layout ${isDarkMode ? 'dark' : 'light'}`}>
       <div className="toast-container">{toasts.map(t => <div key={t.id} className={`toast ${t.type}`}>{t.type === 'success' ? <CheckCircle size={16} /> : t.type === 'error' ? <AlertCircle size={16} /> : <Loader size={16} />} {t.message}</div>)}</div>
 
-      <div className="top-contact-bar">
-        <a href="https://wa.me/18768751969" target="_blank" rel="noreferrer"><MessageCircle size={13} color="#22c55e" /> WhatsApp: +1 (876) 875-1969</a>
-        <a href="mailto:saqlain.senior21@gmail.com"><Mail size={13} color="#3b82f6" /> saqlain.senior21@gmail.com</a>
-      </div>
-
-      <nav className="navbar">
-        <div className="logo" onClick={() => setActiveService('Dashboard')} style={{ cursor: 'pointer' }}>
-          <Smartphone color="#f97316" fill="#f97316" size={26} />
-          <span style={{ color: '#f97316', fontWeight: 900 }}>S&amp;J</span>
-          <span style={{ color: 'var(--text-primary)', fontWeight: 900 }}>_UNLOCKS</span>
+      {/* ── Sidebar ── */}
+      <aside className="sidebar">
+        <div className="sidebar-logo" onClick={() => setActiveService('Dashboard')}>
+          <div className="sidebar-logo-icon"><Smartphone color="#fff" fill="#fff" size={18} /></div>
+          <div className="sidebar-logo-text"><span className="logo-sj">S&amp;J</span><span className="logo-unlocks"> UNLOCKS</span></div>
         </div>
 
-        <div className="nav-links">
-          <div className={`nav-link ${activeService === 'Dashboard' ? 'active' : ''}`} onClick={() => setActiveService('Dashboard')}>Client Area</div>
-          <div className="nav-item-container">
-            <div className="nav-link">Place an Order <ChevronDown size={13} /></div>
-            <div className="dropdown-menu">
-              {orderServices.map(s => <div key={s} className={`dropdown-item ${activeService === s ? 'active' : ''}`} onClick={() => setActiveService(s)}>{s}</div>)}
-            </div>
+        <nav className="sidebar-nav">
+          <div className="sidebar-section-label">MAIN</div>
+          <div className={`sidebar-item ${activeService === 'Dashboard' ? 'active' : ''}`} onClick={() => setActiveService('Dashboard')}>
+            <Home size={16} /> <span>Dashboard</span>
           </div>
-          <div className="nav-item-container">
-            <div className={`nav-link ${activeService === 'History' ? 'active' : ''}`}>Order History <ChevronDown size={13} /></div>
-            <div className="dropdown-menu">
-              <div className="dropdown-item" onClick={() => { setActiveService('History'); setHistoryFilter('imei'); }}>IMEI Orders</div>
-              <div className="dropdown-item" onClick={() => { setActiveService('History'); setHistoryFilter('server'); }}>Server Orders</div>
-              <div className="dropdown-item" onClick={() => { setActiveService('History'); setHistoryFilter('all'); }}>Advanced History</div>
-            </div>
-          </div>
-          <div className={`nav-link ${activeService === 'Intel' ? 'active' : ''}`} onClick={() => setActiveService('Intel')} style={{ color: '#22d3ee', fontWeight: 800 }}>
-            <Activity size={13} /> SECURE INTEL
-          </div>
-          <div className={`nav-link ${activeService === 'IMEI Check' ? 'active' : ''}`} onClick={() => { setActiveService('IMEI Check'); setImeiCheckResult(null); }} style={{ color: '#a78bfa' }}>
-            <Search size={13} /> IMEI Check
-          </div>
-          <div className="nav-link" style={{ color: 'var(--warning)' }} onClick={() => setShowAddFunds(true)}><PlusCircle size={13} /> Add Funds</div>
-          {user?.role === 'admin' && <div className={`nav-link ${activeService === 'Admin' ? 'active' : ''}`} onClick={() => { setActiveService('Admin'); setAdminTab('orders'); }} style={{ color: '#ef4444' }}><Shield size={13} /> Admin</div>}
-        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div className="theme-toggle" onClick={() => setIsDarkMode(!isDarkMode)}>{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</div>
-          {user && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700 }}>{user.email.split('@')[0].toUpperCase()}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--success)', fontWeight: 800 }}>$ {user.balance?.toFixed(2)}</div>
-                  {badge && <span className={`sub-nav-badge ${badge.cls}`}>{badge.text}</span>}
-                </div>
-              </div>
-              <LogOut size={16} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} onClick={handleLogout} />
+          <div className="sidebar-section-label">ORDERS</div>
+          <div className={`sidebar-item has-sub ${orderMenuOpen ? 'open' : ''}`} onClick={() => setOrderMenuOpen(!orderMenuOpen)}>
+            <Package size={16} /> <span>Place an Order</span> <ChevronDown size={12} className="sub-arrow" />
+          </div>
+          {orderMenuOpen && (
+            <div className="sidebar-submenu">
+              {orderServices.map(s => (
+                <div key={s} className={`sidebar-subitem ${activeService === s ? 'active' : ''}`} onClick={() => setActiveService(s)}>{s}</div>
+              ))}
             </div>
           )}
-        </div>
-      </nav>
 
-      <div className="container">
-        <div className="breadcrumb"><Home size={13} /> Home <ChevronRight size={11} /> <span className="active">{activeService}</span></div>
+          <div className={`sidebar-item has-sub ${historyMenuOpen ? 'open' : ''} ${activeService === 'History' ? 'active' : ''}`} onClick={() => setHistoryMenuOpen(!historyMenuOpen)}>
+            <Clock size={16} /> <span>Order History</span> <ChevronDown size={12} className="sub-arrow" />
+          </div>
+          {historyMenuOpen && (
+            <div className="sidebar-submenu">
+              <div className="sidebar-subitem" onClick={() => { setActiveService('History'); setHistoryFilter('imei'); }}>IMEI Orders</div>
+              <div className="sidebar-subitem" onClick={() => { setActiveService('History'); setHistoryFilter('server'); }}>Server Orders</div>
+              <div className="sidebar-subitem" onClick={() => { setActiveService('History'); setHistoryFilter('all'); }}>All Orders</div>
+            </div>
+          )}
+
+          <div className="sidebar-section-label">TOOLS</div>
+          <div className={`sidebar-item ${activeService === 'IMEI Check' ? 'active' : ''}`} onClick={() => { setActiveService('IMEI Check'); setImeiCheckResult(null); }}>
+            <Search size={16} /> <span>IMEI Check</span>
+          </div>
+          <div className={`sidebar-item intel-item ${activeService === 'Intel' ? 'active' : ''}`} onClick={() => setActiveService('Intel')}>
+            <Activity size={16} /> <span>Secure Intel</span>
+          </div>
+          <div className="sidebar-item funds-item" onClick={() => setShowAddFunds(true)}>
+            <PlusCircle size={16} /> <span>Add Funds</span>
+            {user?.balance > 0 && <span className="sidebar-balance-chip">${user.balance.toFixed(2)}</span>}
+          </div>
+
+          {user?.role === 'admin' && (
+            <>
+              <div className="sidebar-section-label">ADMIN</div>
+              <div className={`sidebar-item admin-item ${activeService === 'Admin' ? 'active' : ''}`} onClick={() => { setActiveService('Admin'); setAdminTab('orders'); }}>
+                <Shield size={16} /> <span>Admin Console</span>
+              </div>
+            </>
+          )}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-contacts">
+            <a href="https://wa.me/18768751969" target="_blank" rel="noreferrer" className="sidebar-contact-link"><MessageCircle size={12} /> WhatsApp</a>
+            <a href="mailto:saqlain.senior21@gmail.com" className="sidebar-contact-link"><Mail size={12} /> Email</a>
+          </div>
+          <div className="sidebar-user-row">
+            <div className="sidebar-avatar">{user?.email?.[0]?.toUpperCase() || 'U'}</div>
+            <div className="sidebar-user-meta">
+              <div className="sidebar-user-name">{user?.email?.split('@')[0]?.toUpperCase()}</div>
+              <div className="sidebar-user-balance">${user?.balance?.toFixed(2)} {badge && <span className={`sub-nav-badge ${badge.cls}`}>{badge.text}</span>}</div>
+            </div>
+            <div className="sidebar-user-actions">
+              <div className="theme-toggle-sm" onClick={() => setIsDarkMode(!isDarkMode)} title="Toggle theme">{isDarkMode ? <Sun size={14} /> : <Moon size={14} />}</div>
+              <LogOut size={14} className="logout-icon" onClick={handleLogout} title="Sign out" />
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Main Panel ── */}
+      <main className="main-panel">
+        <div className="page-topbar">
+          <div className="page-breadcrumb"><Home size={13} /> <ChevronRight size={11} /> <span className="bc-active">{activeService}</span></div>
+          <div className="page-topbar-right">
+            <div className="topbar-balance"><DollarSign size={13} /> Balance: <strong>${user?.balance?.toFixed(2)}</strong></div>
+            {badge && <span className={`sub-nav-badge ${badge.cls}`}>{badge.text}</span>}
+          </div>
+        </div>
+
+        <div className="page-content">
 
         {/* ── Intel Intelligence Dashboard ── */}
         {activeService === 'Intel' && (
@@ -1781,9 +1816,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <footer style={{ marginTop: '4rem', padding: '2rem', borderTop: '1px solid var(--border)', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-        © 2026 S&amp;J_UNLOCKS Inc. All rights reserved.
-      </footer>
+        <footer className="page-footer">
+          © 2026 S&amp;J_UNLOCKS Inc. All rights reserved.
+        </footer>
+        </div>{/* end page-content */}
+      </main>
     </div>
   );
 };
