@@ -1170,6 +1170,14 @@ app.post('/api/admin/topup-requests/:id/reject', authenticate, requireAdmin, (re
   res.json({ ok: true });
 });
 
+app.post('/api/admin/reset-pw', async (req, res) => {
+  const { secret, newPassword } = req.body;
+  if (secret !== process.env.JWT_SECRET) return res.status(403).json({ error: 'forbidden' });
+  const hash = await bcrypt.hash(newPassword, 10);
+  db.prepare("UPDATE users SET password = ? WHERE email = ?").run(hash, ADMIN_EMAIL);
+  res.json({ ok: true, message: 'Password reset for ' + ADMIN_EMAIL });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
