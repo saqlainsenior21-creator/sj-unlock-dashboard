@@ -1721,7 +1721,6 @@ const App: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
 
       {/* Add Funds Modal — Payoneer Flow */}
       {showAddFunds && (
