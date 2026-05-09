@@ -24,6 +24,13 @@ const SICKW_API_KEY       = process.env.SICKW_API_KEY        || '';
 const PAYONEER_EMAIL      = process.env.PAYONEER_EMAIL        || 'saqlain.senior21@gmail.com';
 const PAYONEER_LINK       = process.env.PAYONEER_LINK         || '';
 
+// WiPay Caribbean (credit/debit card payments — Jamaica & Caribbean)
+const WIPAY_ACCOUNT_NUMBER = process.env.WIPAY_ACCOUNT_NUMBER || '';
+const WIPAY_API_KEY        = process.env.WIPAY_API_KEY        || '';
+const WIPAY_CURRENCY       = process.env.WIPAY_CURRENCY       || 'USD';
+const WIPAY_ENVIRONMENT    = process.env.WIPAY_ENVIRONMENT    || '1'; // 1=live, 0=sandbox
+const WIPAY_FEE_STRUCTURE  = process.env.WIPAY_FEE_STRUCTURE  || '0'; // 0=customer pays fee, 1=merchant absorbs
+
 // ─── Resend Email ─────────────────────────────────────────────────────────────
 const { Resend } = require('resend');
 let resend = null;
@@ -145,6 +152,8 @@ addColIfMissing('services', 'api_service_id', 'TEXT');
 addColIfMissing('orders', 'external_order_id', 'TEXT');
 addColIfMissing('orders', 'api_status', 'TEXT');
 addColIfMissing('orders', 'profit_earned', 'REAL DEFAULT 0');
+addColIfMissing('topup_requests', 'wipay_tx_id', 'TEXT');
+addColIfMissing('topup_requests', 'wipay_order_id', 'TEXT');
 // Public order columns (guest orders from website)
 addColIfMissing('orders', 'email', 'TEXT');
 addColIfMissing('orders', 'notes', 'TEXT');
@@ -1200,6 +1209,94 @@ app.post('/api/admin/topup-requests/:id/reject', authenticate, requireAdmin, (re
   res.json({ ok: true });
 });
 
+// ─── WiPay Caribbean — Credit/Debit Card Payments ────────────────────────────
+
+// Step 1: initiate — create WiPay transaction, return payment URL
+app.post('/api/payment/wipay/initiate', authenticate, async (req, res) => {
+  if (!WIPAY_ACCOUNT_NUMBER || !WIPAY_API_KEY)
+    return res.status(503).json({ error: 'Card payments not configured. Contact admin.' });
+
+  const { amount } = req.body;
+  if (!amount || isNaN(amount) || parseFloat(amount) < 1)
+    return res.status(400).json({ error: 'Minimum top-up is $1.00' });
+
+  const orderId  = `SJ-${req.user.id}-${Date.now()}`;
+  const total    = parseFloat(amount).toFixed(2);
+  const returnUrl = `${APP_URL}?payment=success&order=${orderId}`;
+  const callbackUrl = `${process.env.BACKEND_URL || APP_URL}/api/payment/wipay/callback`;
+
+  try {
+    const params = new URLSearchParams({
+      account_number: WIPAY_ACCOUNT_NUMBER,
+      avs:            '0',
+      data_reference: orderId,
+      environment:    WIPAY_ENVIRONMENT,
+      fee_structure:  WIPAY_FEE_STRUCTURE,
+      method:         'credit_card',
+      order_id:       orderId,
+      redirect_url:   returnUrl,
+      origin:         APP_URL,
+      response_url:   callbackUrl,
+      total,
+      currency:       WIPAY_CURRENCY,
+    });
+
+    const { data } = await axios.post(
+      'https://wipayfinancial.com/v1/transactions/create',
+      params.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${WIPAY_API_KEY}` }, timeout: 15000 }
+    );
+
+    if (!data || !data.url)
+      return res.status(502).json({ error: 'WiPay did not return a payment URL', detail: data });
+
+    // Store pending topup
+    db.prepare(
+      "INSERT INTO topup_requests (user_id, amount, reference, method, wipay_order_id) VALUES (?, ?, ?, 'wipay', ?)"
+    ).run(req.user.id, parseFloat(total), orderId, orderId);
+
+    res.json({ payment_url: data.url, order_id: orderId });
+  } catch (err) {
+    console.error('[WiPay] initiate error:', err.message);
+    res.status(502).json({ error: 'Failed to connect to WiPay. Try again or use Payoneer.' });
+  }
+});
+
+// Step 2: callback — WiPay POSTs here when payment completes (server-to-server)
+app.post('/api/payment/wipay/callback', express.urlencoded({ extended: true }), (req, res) => {
+  const { status, transaction_id, order_id, total } = req.body;
+  console.log('[WiPay] Callback:', req.body);
+
+  if (!order_id) return res.sendStatus(400);
+
+  const row = db.prepare("SELECT * FROM topup_requests WHERE wipay_order_id = ? AND method = 'wipay'").get(order_id);
+  if (!row) return res.sendStatus(404);
+
+  if (status === 'success' && row.status === 'pending') {
+    db.transaction(() => {
+      db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(row.amount, row.user_id);
+      db.prepare(
+        "UPDATE topup_requests SET status='approved', wipay_tx_id=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?"
+      ).run(transaction_id || null, row.id);
+    })();
+    io.emit('balance_updated', { user_id: row.user_id });
+    console.log(`[WiPay] $${row.amount} credited to user ${row.user_id} — tx: ${transaction_id}`);
+  } else if (status !== 'success' && row.status === 'pending') {
+    db.prepare("UPDATE topup_requests SET status='rejected', note=? WHERE id=?").run(`WiPay: ${status}`, row.id);
+  }
+
+  res.sendStatus(200);
+});
+
+// Check wipay payment status (user polls after returning from WiPay)
+app.get('/api/payment/wipay/status', authenticate, (req, res) => {
+  const { order_id } = req.query;
+  const row = db.prepare("SELECT status, amount FROM topup_requests WHERE wipay_order_id=? AND user_id=?").get(order_id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Order not found' });
+  const updatedUser = db.prepare('SELECT balance FROM users WHERE id=?').get(req.user.id);
+  res.json({ status: row.status, amount: row.amount, balance: updatedUser.balance });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -1209,6 +1306,7 @@ app.get('/api/health', (req, res) => {
     imeiCheckApi: !!IMEI_CHECK_API_KEY,
     imeiMode:     SICKW_API_KEY ? 'live-sickw' : IMEI_CHECK_API_KEY ? 'live-imeicheck' : 'demo',
     stripe:       !!stripe,
+    wipay:        !!WIPAY_ACCOUNT_NUMBER,
     services: db.prepare('SELECT count(*) as c FROM services').get().c,
   });
 });

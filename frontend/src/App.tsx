@@ -324,7 +324,8 @@ const App: React.FC = () => {
   const [payoneerInfo, setPayoneerInfo] = useState<{ email: string; link: string } | null>(null);
   const [topupAmount, setTopupAmount] = useState('');
   const [topupRef, setTopupRef] = useState('');
-  const [topupStep, setTopupStep] = useState<'amount' | 'pay' | 'done'>('amount');
+  const [topupStep, setTopupStep] = useState<'amount' | 'method' | 'pay' | 'done'>('amount');
+  const [topupMethod, setTopupMethod] = useState<'payoneer' | 'wipay'>('wipay');
   const [topupLoading, setTopupLoading] = useState(false);
   const [_topupRequests, setTopupRequests] = useState<any[]>([]);
   const [adminTopups, setAdminTopups] = useState<any[]>([]);
@@ -352,6 +353,34 @@ const App: React.FC = () => {
       localStorage.setItem('token', t);
       setToken(t);
       window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
+  // WiPay return handler
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get('payment');
+    const orderId = params.get('order');
+    if (payment && orderId) {
+      window.history.replaceState(null, '', window.location.pathname);
+      if (payment === 'success') {
+        showToast('Card payment received! Checking balance...', 'info');
+        setTimeout(async () => {
+          try {
+            const t = localStorage.getItem('token');
+            if (!t) return;
+            const res = await axios.get(`${API_URL}/api/payment/wipay/status?order_id=${orderId}`, { headers: { Authorization: `Bearer ${t}` } });
+            if (res.data.status === 'approved') {
+              showToast(`$${res.data.amount.toFixed(2)} added to your balance!`, 'success');
+              setUser((u: any) => u ? { ...u, balance: res.data.balance } : u);
+            } else {
+              showToast('Payment received — balance will be updated shortly.', 'info');
+            }
+          } catch { showToast('Payment processed. Refresh to see updated balance.', 'info'); }
+        }, 2000);
+      } else {
+        showToast('Card payment was not completed. Please try again.', 'error');
+      }
     }
   }, []);
 
@@ -1736,48 +1765,90 @@ const App: React.FC = () => {
           </div>
         )}
 
-      {/* Add Funds Modal — Payoneer Flow */}
+      {/* Add Funds Modal */}
       {showAddFunds && (
         <div className="modal-overlay" onClick={() => { setShowAddFunds(false); setTopupStep('amount'); setTopupAmount(''); setTopupRef(''); }}>
-          <div className="stat-card" style={{ width: 440, padding: '2rem', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+          <div className="stat-card" style={{ width: 460, padding: '2rem', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
 
             {topupStep === 'amount' && (<>
-              <CreditCard size={40} color="#6366f1" style={{ marginBottom: '0.75rem' }} />
-              <h3 style={{ marginBottom: '0.25rem' }}>Add Funds via Payoneer</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Select or enter an amount to top up your balance.</p>
-
+              <CreditCard size={36} color="#6366f1" style={{ marginBottom: '0.75rem' }} />
+              <h3 style={{ marginBottom: '0.25rem' }}>Add Funds</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Select an amount to top up your balance.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1rem' }}>
                 {[10, 25, 50, 100].map(amt => (
                   <button key={amt} className={`tool-btn ${topupAmount === String(amt) ? 'accent' : ''}`}
-                    style={{ height: '2.5rem', fontWeight: 700 }}
-                    onClick={() => setTopupAmount(String(amt))}>
+                    style={{ height: '2.5rem', fontWeight: 700 }} onClick={() => setTopupAmount(String(amt))}>
                     ${amt}
                   </button>
                 ))}
               </div>
-              <input
-                type="number"
-                placeholder="Custom amount ($)"
-                value={topupAmount}
-                min="1"
-                step="0.01"
+              <input type="number" placeholder="Custom amount ($)" value={topupAmount} min="1" step="0.01"
                 onChange={e => setTopupAmount(e.target.value)}
-                style={{ width: '100%', marginBottom: '1rem', textAlign: 'center', fontFamily: 'monospace', fontSize: '1.1rem' }}
-                className="search-bar"
-              />
+                style={{ width: '100%', marginBottom: '1.25rem', textAlign: 'center', fontFamily: 'monospace', fontSize: '1.1rem' }}
+                className="search-bar" />
               <button className="tool-btn accent" style={{ width: '100%', height: '3rem' }}
                 disabled={!topupAmount || parseFloat(topupAmount) < 1}
-                onClick={() => setTopupStep('pay')}>
+                onClick={() => setTopupStep('method')}>
                 Continue — ${topupAmount ? parseFloat(topupAmount).toFixed(2) : '0.00'} →
               </button>
               <button className="tool-btn" style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }} onClick={() => { setShowAddFunds(false); setTopupAmount(''); }}>Cancel</button>
             </>)}
 
+            {topupStep === 'method' && (<>
+              <h3 style={{ marginBottom: '0.25rem' }}>Choose Payment Method</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1.5rem' }}>Adding <strong style={{ color: '#10b981' }}>${parseFloat(topupAmount).toFixed(2)}</strong> to your balance</p>
+
+              {/* WiPay Card Payment */}
+              <div onClick={() => setTopupMethod('wipay')}
+                style={{ border: `2px solid ${topupMethod === 'wipay' ? '#6366f1' : 'var(--border)'}`, borderRadius: 12, padding: '1rem 1.25rem', marginBottom: '0.75rem', cursor: 'pointer', textAlign: 'left', background: topupMethod === 'wipay' ? 'rgba(99,102,241,0.08)' : 'transparent', transition: 'all 0.15s' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.5rem' }}>💳</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>Credit / Debit Card</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Visa · Mastercard · Any Jamaican Bank Card — powered by WiPay</div>
+                  </div>
+                  {topupMethod === 'wipay' && <span style={{ marginLeft: 'auto', color: '#6366f1', fontSize: '1.1rem' }}>✓</span>}
+                </div>
+              </div>
+
+              {/* Payoneer */}
+              <div onClick={() => setTopupMethod('payoneer')}
+                style={{ border: `2px solid ${topupMethod === 'payoneer' ? '#6366f1' : 'var(--border)'}`, borderRadius: 12, padding: '1rem 1.25rem', marginBottom: '1.25rem', cursor: 'pointer', textAlign: 'left', background: topupMethod === 'payoneer' ? 'rgba(99,102,241,0.08)' : 'transparent', transition: 'all 0.15s' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.5rem' }}>🏦</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>Payoneer Transfer</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Manual bank/wire transfer — admin approval required</div>
+                  </div>
+                  {topupMethod === 'payoneer' && <span style={{ marginLeft: 'auto', color: '#6366f1', fontSize: '1.1rem' }}>✓</span>}
+                </div>
+              </div>
+
+              <button className="tool-btn accent" style={{ width: '100%', height: '3rem' }}
+                disabled={topupLoading}
+                onClick={async () => {
+                  if (topupMethod === 'wipay') {
+                    setTopupLoading(true);
+                    try {
+                      const res = await api.post('/payment/wipay/initiate', { amount: parseFloat(topupAmount) });
+                      window.location.href = res.data.payment_url;
+                    } catch (err: any) {
+                      showToast(err.response?.data?.error || 'Card payment unavailable. Try Payoneer.', 'error');
+                      setTopupLoading(false);
+                    }
+                  } else {
+                    setTopupStep('pay');
+                  }
+                }}>
+                {topupLoading ? <div className="spinner" /> : topupMethod === 'wipay' ? '💳 Pay by Card →' : '🏦 Continue with Payoneer →'}
+              </button>
+              <button className="tool-btn" style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }} onClick={() => setTopupStep('amount')}>← Back</button>
+            </>)}
+
             {topupStep === 'pay' && (<>
-              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>💳</div>
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🏦</div>
               <h3 style={{ marginBottom: '0.25rem' }}>Send ${parseFloat(topupAmount).toFixed(2)} via Payoneer</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '1.25rem' }}>Send the exact amount to our Payoneer account, then paste your transaction reference below.</p>
-
               <div style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem', textAlign: 'left' }}>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: 4 }}>PAYONEER EMAIL</div>
                 <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#a78bfa', fontSize: '1rem', marginBottom: '0.75rem' }}>{payoneerInfo?.email || 'saqlain.senior21@gmail.com'}</div>
@@ -1789,15 +1860,9 @@ const App: React.FC = () => {
                   </button>
                 )}
               </div>
-
-              <input
-                type="text"
-                placeholder="Paste Payoneer transaction reference / ID"
-                value={topupRef}
-                onChange={e => setTopupRef(e.target.value)}
-                className="search-bar"
-                style={{ width: '100%', marginBottom: '0.75rem', fontFamily: 'monospace' }}
-              />
+              <input type="text" placeholder="Paste Payoneer transaction reference / ID"
+                value={topupRef} onChange={e => setTopupRef(e.target.value)}
+                className="search-bar" style={{ width: '100%', marginBottom: '0.75rem', fontFamily: 'monospace' }} />
               <button className="tool-btn accent" style={{ width: '100%', height: '3rem' }}
                 disabled={topupLoading || topupRef.trim().length < 3}
                 onClick={async () => {
@@ -1813,7 +1878,7 @@ const App: React.FC = () => {
                 }}>
                 {topupLoading ? <div className="spinner" /> : 'Submit Top-Up Request'}
               </button>
-              <button className="tool-btn" style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }} onClick={() => setTopupStep('amount')}>← Back</button>
+              <button className="tool-btn" style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }} onClick={() => setTopupStep('method')}>← Back</button>
             </>)}
 
             {topupStep === 'done' && (<>
