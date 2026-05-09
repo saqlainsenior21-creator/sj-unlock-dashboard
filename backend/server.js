@@ -215,12 +215,21 @@ const SERVICE_CATALOGUE = [
   ['Tecno / Infinix Stock Firmware Package',                         6.99,  2.50,  'Tecno Firmware',      'Instant',    'file',   null],
   ['Samsung ENG Boot File (Root / EFS Backup)',                     14.99,  6.00,  'Samsung ENG',         'Instant',    'file',   null],
   ['MTK CPU Auth / DA File Service',                                 9.99,  4.00,  'MTK Auth File',       'Instant',    'file',   null],
-  // ── IMEI Check / SickW (charged per lookup — api_service_id = SickW service ID) ──
-  ['IMEI Full Bundle - Brand + iCloud + SIM Lock',                   0.99,  0.07,  'IMEI Check',          'Instant',    'check',  'bundle'],
+  // ── IMEI Check / SickW — costs verified May 2026 from live SickW API ──
+  ['IMEI Full Bundle - Brand + iCloud + SIM Lock',                   1.29,  0.065, 'IMEI Check',          'Instant',    'check',  'bundle'],
   ['iCloud / FMI Status Check',                                      0.49,  0.02,  'IMEI Check',          'Instant',    'check',  '3'],
-  ['SIM Lock / Network Carrier Check',                               0.49,  0.025, 'IMEI Check',          'Instant',    'check',  '8'],
-  ['Apple GSX Basic Info Check',                                     0.99,  0.05,  'IMEI Check',          'Instant',    'check',  '30'],
-  ['Apple Serial Number Info Check',                                 0.29,  0.01,  'IMEI Check',          'Instant',    'check',  '26'],
+  ['iPhone SIM-Lock / Carrier Check',                                0.49,  0.025, 'IMEI Check',          'Instant',    'check',  '8'],
+  ['Apple Basic Info Check (GSX)',                                   0.79,  0.05,  'IMEI Check',          'Instant',    'check',  '30'],
+  ['Apple Serial Number Info Check',                                 0.49,  0.01,  'IMEI Check',          'Instant',    'check',  '26'],
+  ['Apple Activation Status Check',                                  0.49,  0.03,  'IMEI Check',          'Instant',    'check',  '101'],
+  ['Samsung Info - Pro Check',                                       1.29,  0.10,  'IMEI Check',          'Instant',    'check',  '1'],
+  ['Google Pixel Info Check',                                        1.99,  0.12,  'IMEI Check',          'Instant',    'check',  '42'],
+  ['Motorola Info Check',                                            1.29,  0.08,  'IMEI Check',          'Instant',    'check',  '13'],
+  ['Huawei Info Check',                                              1.29,  0.10,  'IMEI Check',          'Instant',    'check',  '15'],
+  ['WW Blacklist Status - Pro',                                      1.99,  0.12,  'IMEI Check',          'Instant',    'check',  '6'],
+  ['Verizon USA Status Check',                                       0.79,  0.05,  'IMEI Check',          'Instant',    'check',  '9'],
+  ['T-Mobile USA Status - Pro',                                      0.79,  0.05,  'IMEI Check',          'Instant',    'check',  '16'],
+  ['Cricket USA Status - Pro',                                       1.99,  0.15,  'IMEI Check',          'Instant',    'check',  '21'],
 ];
 
 // Upsert seeder — updates prices on every restart, inserts new services
@@ -668,8 +677,8 @@ app.get('/api/services', authenticate, (req, res) => {
 });
 
 // ─── IMEI Check ───────────────────────────────────────────────────────────────
-const IMEI_CHECK_PRICE = 0.99;  // credit charge per lookup (your retail price)
-const IMEI_CHECK_COST  = 0.07;  // ~$0.02 brand + $0.02 iCloud + $0.025 SIM-lock = ~$0.065
+const IMEI_CHECK_PRICE = 1.29;  // credit charge per lookup (brand + iCloud + SIM lock bundle)
+const IMEI_CHECK_COST  = 0.065; // $0.02 brand(203) + $0.02 iCloud(3) + $0.025 SIM(8) = $0.065
 
 app.get('/api/imei/check', authenticate, requireSub, async (req, res) => {
   const { imei } = req.query;
@@ -1031,19 +1040,24 @@ app.get('/api/orders/:id/result', authenticate, (req, res) => {
 });
 
 // ─── SickW Service Sync ───────────────────────────────────────────────────────
+// Sell price tiers based on real SickW costs (verified May 2026)
+// iCloud/SIM/Brand checks cost $0.02-0.025 → sell $0.49
+// Apple basic/Verizon/T-Mobile cost $0.05-0.06 → sell $0.79
+// Samsung/Motorola/Huawei info cost $0.08-0.12 → sell $1.29
+// Cricket/Pixel/Blacklist cost $0.12-0.25 → sell $1.99
 function sickwMarkup(cost) {
   const c = parseFloat(cost) || 0;
-  if (c === 0)    return 0.29;
-  if (c < 0.03)  return 0.29;
-  if (c < 0.06)  return 0.49;
-  if (c < 0.12)  return 0.99;
-  if (c < 0.25)  return 1.49;
-  if (c < 0.50)  return 2.99;
-  if (c < 1.00)  return 4.99;
-  if (c < 2.00)  return 7.99;
-  if (c < 5.00)  return Math.ceil(c * 4 * 2) / 2;   // ~4x, rounded to .0 or .5
+  if (c === 0)    return 0.49;
+  if (c < 0.03)  return 0.49;   // iCloud, SIM lock, brand, serial info
+  if (c < 0.06)  return 0.79;   // Apple basic, Verizon, T-Mobile, ZTE
+  if (c < 0.12)  return 1.29;   // Samsung, Motorola, Huawei, Japan BL
+  if (c < 0.25)  return 1.99;   // Cricket, Pixel, WW Blacklist, MacBook
+  if (c < 0.50)  return 3.49;
+  if (c < 1.00)  return 5.99;
+  if (c < 2.00)  return 9.99;
+  if (c < 5.00)  return Math.ceil(c * 4 * 2) / 2;   // ~4x
   if (c < 20.00) return Math.ceil(c * 3 * 2) / 2;   // ~3x
-  return Math.ceil(c * 2.5 * 2) / 2;                // ~2.5x for expensive
+  return Math.ceil(c * 2.5 * 2) / 2;                // ~2.5x for premium
 }
 
 // Fetch all SickW services and sync into DB
