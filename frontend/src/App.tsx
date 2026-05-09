@@ -821,17 +821,6 @@ const App: React.FC = () => {
             <a href="https://wa.me/18768751969" target="_blank" rel="noreferrer" className="sidebar-contact-link"><MessageCircle size={12} /> WhatsApp</a>
             <a href="mailto:saqlain.senior21@gmail.com" className="sidebar-contact-link"><Mail size={12} /> Email</a>
           </div>
-          <div className="sidebar-user-row">
-            <div className="sidebar-avatar">{user?.email?.[0]?.toUpperCase() || 'U'}</div>
-            <div className="sidebar-user-meta">
-              <div className="sidebar-user-name">{user?.email?.split('@')[0]?.toUpperCase()}</div>
-              <div className="sidebar-user-balance">${user?.balance?.toFixed(2)} {badge && <span className={`sub-nav-badge ${badge.cls}`}>{badge.text}</span>}</div>
-            </div>
-            <div className="sidebar-user-actions">
-              <div className="theme-toggle-sm" onClick={() => setIsDarkMode(!isDarkMode)} title="Toggle theme">{isDarkMode ? <Sun size={14} /> : <Moon size={14} />}</div>
-              <LogOut size={14} className="logout-icon" onClick={handleLogout} />
-            </div>
-          </div>
         </div>
       </aside>
 
@@ -842,6 +831,12 @@ const App: React.FC = () => {
           <div className="page-topbar-right">
             <div className="topbar-balance"><DollarSign size={13} /> Balance: <strong>${user?.balance?.toFixed(2)}</strong></div>
             {badge && <span className={`sub-nav-badge ${badge.cls}`}>{badge.text}</span>}
+            <div className="topbar-user-chip">
+              <div className="sidebar-avatar" style={{ width: 28, height: 28, fontSize: '0.7rem' }}>{user?.email?.[0]?.toUpperCase() || 'U'}</div>
+              <span className="topbar-username">{user?.email?.split('@')[0]?.toUpperCase()}</span>
+            </div>
+            <div className="topbar-icon-btn" onClick={() => setIsDarkMode(!isDarkMode)}>{isDarkMode ? <Sun size={14} /> : <Moon size={14} />}</div>
+            <div className="topbar-icon-btn logout" onClick={handleLogout}><LogOut size={14} /></div>
           </div>
         </div>
 
