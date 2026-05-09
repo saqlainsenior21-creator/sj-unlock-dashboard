@@ -550,6 +550,14 @@ const App: React.FC = () => {
   }, [activeService, user]);
 
   useEffect(() => {
+    if (user?.role === 'admin') {
+      api.get('/admin/sickw/balance')
+        .then(r => setSickwBalance(r.data.balance))
+        .catch(() => {});
+    }
+  }, [user]);
+
+  useEffect(() => {
     document.body.className = isDarkMode ? '' : 'light-mode';
   }, [isDarkMode]);
 
@@ -1629,6 +1637,17 @@ const App: React.FC = () => {
                         {user?.role === 'admin' && 'Enterprise (Admin)'}
                       </div>
                     </div>
+                    {user?.role === 'admin' && (
+                      <div className="stat-card" style={{ cursor: 'pointer' }} onClick={() => api.get('/admin/sickw/balance').then(r => { setSickwBalance(r.data.balance); showToast('SickW balance synced', 'success'); }).catch(() => showToast('Failed to sync SickW balance', 'error'))}>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>SICKW CREDIT</span>
+                          <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(click to refresh)</span>
+                        </div>
+                        <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#f59e0b' }}>
+                          {sickwBalance != null ? `$ ${parseFloat(sickwBalance).toFixed(2)}` : '—'}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <h2 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>RECENT ORDERS</h2>
