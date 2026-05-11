@@ -1454,6 +1454,16 @@ app.get('/api/admin/elbroos/order/:orderId', authenticate, requireAdmin, async (
   res.json(data);
 });
 
+// Admin: show this server's outbound IP (needed for UnlockBase IP whitelist)
+app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { data } = await axios.get('https://api.ipify.org?format=json', { timeout: 5000 });
+    res.json({ ip: data.ip, note: 'Add this IP to your UnlockBase reseller API whitelist' });
+  } catch {
+    res.status(502).json({ error: 'Could not determine outbound IP' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
