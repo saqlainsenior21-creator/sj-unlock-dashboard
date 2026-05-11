@@ -223,8 +223,8 @@ const SERVICE_CATALOGUE = [
   // ── Remote Services ──
   ['Xiaomi Mi Account Remove - Permanent',                           16.99,  9.00,  'Xiaomi Mi Account',   '1-12 Hours', 'remote', null],
   ['Tecno / Infinix / iTel MDM Remove Permanent',                    11.99,  5.50,  'Tecno MDM',           '1-24 Hours', 'remote', null],
-  ['Samsung MDM Remove - Knox Bypass Service',                       79.99, 50.00,  'Samsung MDM',         '1-12 Hours', 'remote', null],
-  ['iPhone iCloud Activation Lock Remove',                           89.99, 55.00,  'iCloud Unlock',       '2-7 Days',   'remote', null],
+  ['Samsung MDM Remove - Knox Bypass Service',                      119.99, 50.00,  'Samsung MDM',         '1-12 Hours', 'remote', null],
+  ['iPhone iCloud Activation Lock Remove',                          129.99, 55.00,  'iCloud Unlock',       '2-7 Days',   'remote', null],
   ['Android Screen Lock Remove (PIN / Pattern / Password)',            9.99,  3.00,  'Screen Unlock',       '1-3 Hours',  'remote', null],
   // ── File Services ──
   ['Samsung Flash File - U/U1 Binary (Latest Official)',              7.99,  2.50,  'Samsung Firmware',    'Instant',    'file',   null],
