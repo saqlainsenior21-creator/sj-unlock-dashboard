@@ -24,6 +24,11 @@ const SICKW_API_KEY       = process.env.SICKW_API_KEY        || '';
 const PAYONEER_EMAIL      = process.env.PAYONEER_EMAIL        || 'saqlain.senior21@gmail.com';
 const PAYONEER_LINK       = process.env.PAYONEER_LINK         || '';
 
+// Elbroos GSM API (IMEI unlock reseller)
+const ELBROOS_USERNAME = process.env.ELBROOS_USERNAME || '';
+const ELBROOS_API_KEY  = process.env.ELBROOS_API_KEY  || 'b9c2a1f0567f9f40c10a2ea595dcaf98';
+const ELBROOS_BASE_URL = 'https://api-gsm.elbroos.com/api/v1';
+
 // WiPay Caribbean (credit/debit card payments — Jamaica & Caribbean)
 const WIPAY_ACCOUNT_NUMBER = process.env.WIPAY_ACCOUNT_NUMBER || '';
 const WIPAY_API_KEY        = process.env.WIPAY_API_KEY        || '';
@@ -155,6 +160,8 @@ addColIfMissing('orders', 'profit_earned', 'REAL DEFAULT 0');
 addColIfMissing('topup_requests', 'wipay_tx_id', 'TEXT');
 addColIfMissing('topup_requests', 'wipay_order_id', 'TEXT');
 // Public order columns (guest orders from website)
+addColIfMissing('services', 'elbroos_service_id', 'TEXT');
+addColIfMissing('orders', 'provider', "TEXT DEFAULT 'unlockbase'");
 addColIfMissing('orders', 'email', 'TEXT');
 addColIfMissing('orders', 'notes', 'TEXT');
 addColIfMissing('orders', 'order_id', 'TEXT');
@@ -486,37 +493,55 @@ async function runIMEICheck(imei) {
 }
 
 // ─── Background order status poller (smart — 2 min for recent, 10 min for older) ──
+function mapElbroosStatus(data) {
+  if (!data) return null;
+  const s = String(data.Status || data.status || '').toLowerCase();
+  if (s.includes('complet') || s.includes('unlock') || s.includes('done') || s.includes('success')) return 'completed';
+  if (s.includes('fail') || s.includes('reject') || s.includes('error') || s.includes('invalid')) return 'failed';
+  if (s.includes('cancel')) return 'cancelled';
+  return null;
+}
+
 async function pollPendingOrders() {
-  if (!UNLOCK_API_KEY) return;
   const now = Date.now();
   const pending = db.prepare(
-    "SELECT id, external_order_id, date FROM orders WHERE external_order_id IS NOT NULL AND status = 'in process'"
+    "SELECT id, external_order_id, provider, date FROM orders WHERE external_order_id IS NOT NULL AND status = 'in process'"
   ).all();
   if (!pending.length) return;
 
   for (const order of pending) {
     const ageMs = now - new Date(order.date).getTime();
-    const isRecent = ageMs < 60 * 60 * 1000; // < 1 hour old
-
-    // Skip older orders on fast poll cycles — checked via lastPolled flag
+    const isRecent = ageMs < 60 * 60 * 1000;
     if (!isRecent && order._slowPoll) continue;
 
-    const result = await checkUnlockBaseOrder(order.external_order_id);
-    if (!result) continue;
+    const provider = order.provider || 'unlockbase';
 
-    const mapped = mapUnlockStatus(result.status);
-
-    // Store unlock code/result if provided
-    const unlockCode = result.code || result.unlock_code || result.result || null;
-
-    if (mapped && mapped !== 'in process') {
-      db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
-        .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
-      io.emit('order_updated');
-      console.log(`[Poller] Order #${order.id} → ${mapped} | Code: ${unlockCode || 'none'}`);
-    } else {
-      // Update api_status even if still in process
-      db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(result.status || 'in process', order.id);
+    if (provider === 'elbroos') {
+      const result = await checkElbroosOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapElbroosStatus(result);
+      const unlockCode = result.Result || result.Code || result.code || null;
+      if (mapped && mapped !== 'in process') {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.Status || mapped, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+        console.log(`[Elbroos Poller] Order #${order.id} → ${mapped}`);
+      } else {
+        db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(result.Status || 'in process', order.id);
+      }
+    } else if (UNLOCK_API_KEY) {
+      const result = await checkUnlockBaseOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapUnlockStatus(result.status);
+      const unlockCode = result.code || result.unlock_code || result.result || null;
+      if (mapped && mapped !== 'in process') {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+        console.log(`[Poller] Order #${order.id} → ${mapped} | Code: ${unlockCode || 'none'}`);
+      } else {
+        db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(result.status || 'in process', order.id);
+      }
     }
   }
 }
@@ -524,23 +549,35 @@ async function pollPendingOrders() {
 // Fast poll: every 2 minutes for recent orders
 setInterval(pollPendingOrders, 2 * 60 * 1000);
 
-// Slow poll: every 10 minutes (catches all including older orders)
+// Slow poll: every 10 minutes
 setInterval(async () => {
-  if (!UNLOCK_API_KEY) return;
   const pending = db.prepare(
-    "SELECT id, external_order_id FROM orders WHERE external_order_id IS NOT NULL AND status = 'in process'"
+    "SELECT id, external_order_id, provider FROM orders WHERE external_order_id IS NOT NULL AND status = 'in process'"
   ).all();
   if (!pending.length) return;
   console.log(`[Poller-10m] Checking ${pending.length} pending order(s)...`);
   for (const order of pending) {
-    const result = await checkUnlockBaseOrder(order.external_order_id);
-    if (!result) continue;
-    const mapped = mapUnlockStatus(result.status);
-    const unlockCode = result.code || result.unlock_code || result.result || null;
-    if (mapped && mapped !== 'in process') {
-      db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
-        .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
-      io.emit('order_updated');
+    const provider = order.provider || 'unlockbase';
+    if (provider === 'elbroos') {
+      const result = await checkElbroosOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapElbroosStatus(result);
+      const unlockCode = result.Result || result.Code || result.code || null;
+      if (mapped) {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.Status || mapped, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+      }
+    } else if (UNLOCK_API_KEY) {
+      const result = await checkUnlockBaseOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapUnlockStatus(result.status);
+      const unlockCode = result.code || result.unlock_code || result.result || null;
+      if (mapped && mapped !== 'in process') {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+      }
     }
   }
 }, 10 * 60 * 1000);
@@ -816,25 +853,38 @@ app.post('/api/orders', authenticate, requireSub, async (req, res) => {
   const updatedUser = db.prepare('SELECT balance FROM users WHERE id = ?').get(user.id);
   io.emit('order_updated');
 
-  // Submit to UnlockBase if service has an api_service_id (non-blocking)
-  if (service.api_service_id && imei) {
-    submitToUnlockBase(service.api_service_id, imei).then((apiResult) => {
-      if (apiResult.success) {
-        db.prepare('UPDATE orders SET external_order_id = ?, api_status = ? WHERE id = ?')
-          .run(apiResult.orderId, apiResult.apiStatus, orderId);
-        console.log(`[UnlockBase] Order #${orderId} submitted → external ID: ${apiResult.orderId}`);
-      } else {
-        console.warn(`[UnlockBase] Order #${orderId} submission failed: ${apiResult.reason}`);
-      }
-      io.emit('order_updated');
-    }).catch(err => console.error('[UnlockBase] Async error:', err.message));
+  // Submit to provider (Elbroos preferred, fallback to UnlockBase) — non-blocking
+  if (imei) {
+    if (service.elbroos_service_id) {
+      submitToElbroos(service.elbroos_service_id, imei).then((r) => {
+        if (r.success) {
+          db.prepare("UPDATE orders SET external_order_id=?, api_status=?, provider='elbroos' WHERE id=?")
+            .run(r.orderId, r.apiStatus, orderId);
+          console.log(`[Elbroos] Order #${orderId} submitted → ID: ${r.orderId}`);
+        } else {
+          console.warn(`[Elbroos] Order #${orderId} failed: ${r.reason}`);
+        }
+        io.emit('order_updated');
+      }).catch(err => console.error('[Elbroos] Async error:', err.message));
+    } else if (service.api_service_id) {
+      submitToUnlockBase(service.api_service_id, imei).then((r) => {
+        if (r.success) {
+          db.prepare("UPDATE orders SET external_order_id=?, api_status=?, provider='unlockbase' WHERE id=?")
+            .run(r.orderId, r.apiStatus, orderId);
+          console.log(`[UnlockBase] Order #${orderId} submitted → ID: ${r.orderId}`);
+        } else {
+          console.warn(`[UnlockBase] Order #${orderId} failed: ${r.reason}`);
+        }
+        io.emit('order_updated');
+      }).catch(err => console.error('[UnlockBase] Async error:', err.message));
+    }
   }
 
   res.json({
     message: 'Order placed successfully',
     balance: updatedUser.balance,
     order_id: orderId,
-    api_connected: !!service.api_service_id,
+    api_connected: !!(service.elbroos_service_id || service.api_service_id),
   });
 });
 
@@ -1029,12 +1079,22 @@ app.post('/api/admin/orders/:id/retry', authenticate, requireAdmin, async (req, 
   }
 });
 
-// Admin: map api_service_id to a service (bulk update for FRP mapping)
+// Admin: map api_service_id to a service (bulk update for UnlockBase/FRP mapping)
 app.post('/api/admin/services/map', authenticate, requireAdmin, (req, res) => {
   const { mappings } = req.body; // [{ id, api_service_id }]
   if (!Array.isArray(mappings)) return res.status(400).json({ error: 'mappings array required' });
   const update = db.prepare('UPDATE services SET api_service_id = ? WHERE id = ?');
   const doAll = db.transaction(() => mappings.forEach(m => update.run(m.api_service_id || null, m.id)));
+  doAll();
+  res.json({ ok: true, updated: mappings.length });
+});
+
+// Admin: map Elbroos service IDs (bulk)
+app.post('/api/admin/services/map-elbroos', authenticate, requireAdmin, (req, res) => {
+  const { mappings } = req.body; // [{ id, elbroos_service_id }]
+  if (!Array.isArray(mappings)) return res.status(400).json({ error: 'mappings array required' });
+  const update = db.prepare('UPDATE services SET elbroos_service_id = ? WHERE id = ?');
+  const doAll = db.transaction(() => mappings.forEach(m => update.run(m.elbroos_service_id || null, m.id)));
   doAll();
   res.json({ ok: true, updated: mappings.length });
 });
@@ -1297,6 +1357,65 @@ app.get('/api/payment/wipay/status', authenticate, (req, res) => {
   res.json({ status: row.status, amount: row.amount, balance: updatedUser.balance });
 });
 
+// ─── Elbroos GSM API Integration ─────────────────────────────────────────────
+// API format: POST JSON with username + apiaccesskey + requestformat + action
+async function elbroosRequest(action, extraFields = {}) {
+  if (!ELBROOS_USERNAME) return { success: false, error: 'ELBROOS_USERNAME not configured' };
+  try {
+    const { data } = await axios.post(
+      `${ELBROOS_BASE_URL}/${action}`,
+      { username: ELBROOS_USERNAME, apiaccesskey: ELBROOS_API_KEY, requestformat: 'JSON', action, ...extraFields },
+      { headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, timeout: 20000 }
+    );
+    return { success: true, data };
+  } catch (err) {
+    const msg = err.response?.data?.message || err.message;
+    console.error(`[Elbroos] ${action} error:`, msg);
+    return { success: false, error: msg };
+  }
+}
+
+// Admin: fetch Elbroos account balance / info
+app.get('/api/admin/elbroos/balance', authenticate, requireAdmin, async (req, res) => {
+  const result = await elbroosRequest('accountinfo');
+  if (!result.success) return res.status(502).json({ error: result.error });
+  res.json(result.data);
+});
+
+// Admin: fetch all Elbroos services
+app.get('/api/admin/elbroos/services', authenticate, requireAdmin, async (req, res) => {
+  const result = await elbroosRequest('imeiservicelist');
+  if (!result.success) return res.status(502).json({ error: result.error });
+  res.json(result.data);
+});
+
+// Place order via Elbroos (called internally when service has elbroos_service_id)
+async function submitToElbroos(serviceId, imei) {
+  if (!ELBROOS_USERNAME) return { success: false, reason: 'Elbroos not configured — set ELBROOS_USERNAME' };
+  const params = `<PARAMETERS><ID>${serviceId}</ID><SERVER>true</SERVER><QUANTITY>1</QUANTITY><TargetLogin>${ELBROOS_USERNAME}</TargetLogin></PARAMETERS>`;
+  const result = await elbroosRequest('placeimeiorder', { parameters: params });
+  if (!result.success) return { success: false, reason: result.error };
+  const d = result.data;
+  if (d?.OrderID) return { success: true, orderId: String(d.OrderID), apiStatus: d.Status || 'in process' };
+  if (d?.error)   return { success: false, reason: d.error };
+  return { success: false, reason: 'Unexpected Elbroos response', raw: d };
+}
+
+// Check Elbroos order status
+async function checkElbroosOrder(externalOrderId) {
+  if (!ELBROOS_USERNAME || !externalOrderId) return null;
+  const params = `<PARAMETERS><ID>${externalOrderId}</ID></PARAMETERS>`;
+  const result = await elbroosRequest('getimeiorder', { parameters: params });
+  return result.success ? result.data : null;
+}
+
+// Admin: manual check on an Elbroos order
+app.get('/api/admin/elbroos/order/:orderId', authenticate, requireAdmin, async (req, res) => {
+  const data = await checkElbroosOrder(req.params.orderId);
+  if (!data) return res.status(502).json({ error: 'Could not fetch order from Elbroos' });
+  res.json(data);
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -1307,6 +1426,7 @@ app.get('/api/health', (req, res) => {
     imeiMode:     SICKW_API_KEY ? 'live-sickw' : IMEI_CHECK_API_KEY ? 'live-imeicheck' : 'demo',
     stripe:       !!stripe,
     wipay:        !!WIPAY_ACCOUNT_NUMBER,
+    elbroos:      !!(ELBROOS_USERNAME && ELBROOS_API_KEY),
     services: db.prepare('SELECT count(*) as c FROM services').get().c,
   });
 });
