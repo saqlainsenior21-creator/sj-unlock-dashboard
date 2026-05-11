@@ -287,48 +287,57 @@ async function seedAdmin() {
 seedAdmin().catch(console.error);
 
 // ─── UnlockBase API helpers ───────────────────────────────────────────────────
-// Sign up at https://www.unlockbase.com/resellers/ to get your API key and service IDs
+// API v2/v3 — POST form-encoded to https://www.unlockbase.com/api/
+// Response JSON: {"apiversion":"2.0.0", "ERROR":[{"MESSAGE":"..."}]}
+//   or success:  {"apiversion":"2.0.0", "balance":{"BALANCE":"25.50",...}}
+//                {"apiversion":"2.0.0", "order":{"ORDER_ID":"123","STATUS":"In Progress",...}}
+const UNLOCK_API_URL = 'https://www.unlockbase.com/api/';
+
+async function unlockBaseRequest(params) {
+  if (!UNLOCK_API_KEY) return { ok: false, error: 'UNLOCK_API_KEY not configured' };
+  try {
+    const body = new URLSearchParams({ secret: UNLOCK_API_KEY, ...params });
+    const { data } = await axios.post(UNLOCK_API_URL, body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 20000,
+    });
+    if (data.ERROR) {
+      const msg = Array.isArray(data.ERROR) ? data.ERROR[0]?.MESSAGE : data.ERROR;
+      return { ok: false, error: msg || 'API error', raw: data };
+    }
+    return { ok: true, raw: data, ...data };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 async function submitToUnlockBase(apiServiceId, imei) {
   if (!UNLOCK_API_KEY) return { success: false, reason: 'API key not configured' };
   if (!apiServiceId)   return { success: false, reason: 'Service not mapped to UnlockBase' };
-  try {
-    const params = new URLSearchParams({
-      secret:  UNLOCK_API_KEY,
-      type:    'add',
-      service: String(apiServiceId),
-      imei:    imei,
-    });
-    const { data } = await axios.post('https://www.unlockbase.com/api/', params.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 15000,
-    });
-    // UnlockBase returns { orderId, status } or { error }
-    if (data.error)   return { success: false, reason: data.error };
-    if (data.orderId) return { success: true, orderId: String(data.orderId), apiStatus: data.status || 'in process' };
-    return { success: false, reason: 'Unexpected API response', raw: data };
-  } catch (err) {
-    console.error('UnlockBase submit error:', err.message);
-    return { success: false, reason: err.message };
-  }
+  const r = await unlockBaseRequest({ type: 'add', service: String(apiServiceId), imei });
+  if (!r.ok) return { success: false, reason: r.error };
+  const order = r.order || r.ORDER || {};
+  const orderId = order.ORDER_ID || order.order_id;
+  if (orderId) return { success: true, orderId: String(orderId), apiStatus: order.STATUS || 'in process' };
+  return { success: false, reason: 'No order ID in response', raw: r.raw };
 }
 
 async function checkUnlockBaseOrder(externalOrderId) {
   if (!UNLOCK_API_KEY || !externalOrderId) return null;
-  try {
-    const params = new URLSearchParams({
-      secret:   UNLOCK_API_KEY,
-      type:     'check',
-      order_id: String(externalOrderId),
-    });
-    const { data } = await axios.post('https://www.unlockbase.com/api/', params.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 10000,
-    });
-    return data;
-  } catch (err) {
-    console.error('UnlockBase status check error:', err.message);
-    return null;
-  }
+  const r = await unlockBaseRequest({ type: 'check', order_id: String(externalOrderId) });
+  if (!r.ok) return null;
+  const order = r.order || r.ORDER || r;
+  return {
+    imei_status: order.STATUS || order.status || '',
+    code:        order.CODE   || order.code   || null,
+  };
+}
+
+async function getUnlockBaseBalance() {
+  const r = await unlockBaseRequest({ type: 'balance' });
+  if (!r.ok) return null;
+  const bal = r.balance || r.BALANCE || {};
+  return parseFloat(bal.BALANCE || bal.balance || bal || '0') || null;
 }
 
 // Map UnlockBase status strings → our internal status values
@@ -534,15 +543,16 @@ async function pollPendingOrders() {
     } else if (UNLOCK_API_KEY) {
       const result = await checkUnlockBaseOrder(order.external_order_id);
       if (!result) continue;
-      const mapped = mapUnlockStatus(result.status);
-      const unlockCode = result.code || result.unlock_code || result.result || null;
+      const humanStatus = result.imei_status || result.status || '';
+      const mapped = mapUnlockStatus(humanStatus);
+      const unlockCode = result.code || null;
       if (mapped && mapped !== 'in process') {
         db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
-          .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+          .run(mapped, humanStatus, unlockCode ? JSON.stringify({ code: unlockCode }) : null, order.id);
         io.emit('order_updated');
         console.log(`[Poller] Order #${order.id} → ${mapped} | Code: ${unlockCode || 'none'}`);
       } else {
-        db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(result.status || 'in process', order.id);
+        db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(humanStatus || 'in process', order.id);
       }
     }
   }
@@ -573,11 +583,12 @@ setInterval(async () => {
     } else if (UNLOCK_API_KEY) {
       const result = await checkUnlockBaseOrder(order.external_order_id);
       if (!result) continue;
-      const mapped = mapUnlockStatus(result.status);
-      const unlockCode = result.code || result.unlock_code || result.result || null;
+      const humanStatus = result.imei_status || result.status || '';
+      const mapped = mapUnlockStatus(humanStatus);
+      const unlockCode = result.code || null;
       if (mapped && mapped !== 'in process') {
         db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
-          .run(mapped, result.status, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+          .run(mapped, humanStatus, unlockCode ? JSON.stringify({ code: unlockCode }) : null, order.id);
         io.emit('order_updated');
       }
     }
@@ -1452,6 +1463,20 @@ app.get('/api/admin/elbroos/order/:orderId', authenticate, requireAdmin, async (
   const data = await checkElbroosOrder(req.params.orderId);
   if (!data) return res.status(502).json({ error: 'Could not fetch order from Elbroos' });
   res.json(data);
+});
+
+// Admin: UnlockBase balance
+app.get('/api/admin/unlockbase/balance', authenticate, requireAdmin, async (req, res) => {
+  const bal = await getUnlockBaseBalance();
+  if (bal === null) return res.status(502).json({ error: 'Could not fetch UnlockBase balance — check API key and IP whitelist' });
+  res.json({ balance: bal, currency: 'USD' });
+});
+
+// Admin: UnlockBase services list
+app.get('/api/admin/unlockbase/services', authenticate, requireAdmin, async (req, res) => {
+  const r = await unlockBaseRequest({ type: 'services' });
+  if (!r.ok) return res.status(502).json({ error: r.error });
+  res.json({ raw: r.raw });
 });
 
 // Admin: show this server's outbound IP (needed for UnlockBase IP whitelist)
