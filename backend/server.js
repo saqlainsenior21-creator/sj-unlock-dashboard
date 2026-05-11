@@ -936,24 +936,60 @@ app.patch('/api/admin/users/:id/subscription', authenticate, requireAdmin, (req,
 });
 
 // Admin: profit & revenue stats
+// Admin: analytics summary — revenue, profit, orders, users, trends
 app.get('/api/admin/stats', authenticate, requireAdmin, (req, res) => {
-  const stats = db.prepare(`
+  const orderStats = db.prepare(`
     SELECT
-      COUNT(*)                                        as total_orders,
-      COALESCE(SUM(s.price), 0)                       as total_revenue,
-      COALESCE(SUM(s.cost_price), 0)                  as total_cost,
-      COALESCE(SUM(o.profit_earned), 0)               as total_profit,
-      COUNT(CASE WHEN o.status='completed' THEN 1 END) as completed,
-      COUNT(CASE WHEN o.status='in process' THEN 1 END) as in_process,
-      COUNT(CASE WHEN o.status='failed' THEN 1 END)   as failed
+      COUNT(*)                                                 AS total_orders,
+      SUM(CASE WHEN o.status = 'completed'  THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN o.status = 'in process' THEN 1 ELSE 0 END) AS in_process,
+      SUM(CASE WHEN o.status = 'failed'     THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN o.status = 'cancelled'  THEN 1 ELSE 0 END) AS cancelled,
+      COALESCE(SUM(s.price),      0)                           AS total_revenue,
+      COALESCE(SUM(s.cost_price), 0)                           AS total_cost
     FROM orders o
-    LEFT JOIN services s ON o.service_id = s.id
+    LEFT JOIN services s ON s.id = o.service_id
+    WHERE o.user_id IS NOT NULL
   `).get();
 
-  const userCount = db.prepare('SELECT count(*) as c FROM users').get().c;
-  const totalBalance = db.prepare('SELECT COALESCE(SUM(balance),0) as t FROM users').get().t;
+  const userCount      = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role != 'admin'").get().c;
+  const totalBalance   = db.prepare('SELECT COALESCE(SUM(balance),0) AS t FROM users').get().t;
+  const pendingTopups  = db.prepare("SELECT COUNT(*) AS c FROM topup_requests WHERE status = 'pending'").get().c;
+  const totalDeposited = db.prepare("SELECT COALESCE(SUM(amount),0) AS t FROM topup_requests WHERE status = 'approved'").get().t;
 
-  res.json({ ...stats, user_count: userCount, total_user_balance: totalBalance });
+  const byCategory = db.prepare(`
+    SELECT s.category, COUNT(*) AS cnt, COALESCE(SUM(s.price),0) AS rev
+    FROM orders o JOIN services s ON s.id = o.service_id
+    WHERE o.status = 'completed'
+    GROUP BY s.category ORDER BY rev DESC LIMIT 6
+  `).all();
+
+  const daily = db.prepare(`
+    SELECT DATE(o.date) AS day, COUNT(*) AS orders, COALESCE(SUM(s.price),0) AS revenue
+    FROM orders o JOIN services s ON s.id = o.service_id
+    WHERE o.date >= DATE('now', '-6 days')
+    GROUP BY DATE(o.date) ORDER BY day
+  `).all();
+
+  const revenue   = parseFloat(orderStats.total_revenue);
+  const cost      = parseFloat(orderStats.total_cost);
+
+  res.json({
+    total_orders:    orderStats.total_orders,
+    completed:       orderStats.completed,
+    in_process:      orderStats.in_process,
+    failed:          orderStats.failed,
+    cancelled:       orderStats.cancelled,
+    user_count:      userCount,
+    total_user_balance: parseFloat(totalBalance).toFixed(2),
+    pending_topups:  pendingTopups,
+    total_deposited: parseFloat(totalDeposited).toFixed(2),
+    total_revenue:   revenue.toFixed(2),
+    total_cost:      cost.toFixed(2),
+    total_profit:    (revenue - cost).toFixed(2),
+    by_category:     byCategory,
+    daily_revenue:   daily,
+  });
 });
 
 // Admin: get service catalogue with cost_price (profit margins visible to admin only)
