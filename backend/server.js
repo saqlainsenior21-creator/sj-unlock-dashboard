@@ -1683,6 +1683,40 @@ app.get('/api/admin/unlockbase/services', authenticate, requireAdmin, async (req
   res.json({ raw: r.raw });
 });
 
+// Admin: auto-map local services to UnlockBase service IDs by fuzzy name match
+app.post('/api/admin/unlockbase/auto-map', authenticate, requireAdmin, async (req, res) => {
+  const r = await unlockBaseRequest({ type: 'services' });
+  if (!r.ok) return res.status(502).json({ error: r.error });
+
+  // UnlockBase returns services under various keys depending on API version
+  const raw = r.raw || {};
+  const ubServices = raw.services || raw.SERVICES || raw.result || [];
+  const list = Array.isArray(ubServices) ? ubServices : Object.values(ubServices);
+  if (!list.length) return res.status(502).json({ error: 'No services in UnlockBase response', raw });
+
+  const allLocal = db.prepare('SELECT id, name, type FROM services').all();
+  const update = db.prepare('UPDATE services SET api_service_id=? WHERE id=?');
+  let matched = 0;
+
+  for (const ub of list) {
+    const ubName = String(ub.name || ub.SERVICE_NAME || ub.service_name || ub.title || '').toLowerCase().trim();
+    const ubId   = String(ub.id || ub.service_id || ub.SERVICE_ID || ub.SERVICE || '').trim();
+    if (!ubName || !ubId || ubId === 'undefined') continue;
+
+    const local = allLocal.find(s => {
+      const n = s.name.toLowerCase();
+      const words = n.split(/\s+/).filter(w => w.length > 4);
+      return n.includes(ubName) || ubName.includes(n) ||
+             (words.length >= 2 && words.every(w => ubName.includes(w)));
+    });
+    if (!local) continue;
+    update.run(ubId, local.id);
+    matched++;
+  }
+
+  res.json({ ok: true, ub_services: list.length, matched });
+});
+
 // Admin: show this server's outbound IP (needed for UnlockBase IP whitelist)
 app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => {
   try {

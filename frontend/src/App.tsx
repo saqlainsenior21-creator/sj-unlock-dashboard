@@ -1417,30 +1417,80 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              {/* API Provider Mapping */}
+              {/* Activate Services via UnlockBase */}
+              <div className="stat-card" style={{ padding: '1.5rem' }}>
+                <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>⚡ Activate Services — UnlockBase Setup</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+                  UnlockBase processes orders automatically. Complete these 3 steps to make services go live.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {/* Step 1 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '0.9rem 1rem', flexWrap: 'wrap' }}>
+                    <span style={{ background: '#6366f1', color: '#fff', borderRadius: '50%', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.85rem', flexShrink: 0 }}>1</span>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>Get your Railway server IP</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Copy it — you need to whitelist it in UnlockBase</div>
+                    </div>
+                    <button className="tool-btn" style={{ height: '2.2rem', padding: '0 1rem', flexShrink: 0 }}
+                      onClick={async () => {
+                        try {
+                          const r = await api.get('/admin/server-ip');
+                          await navigator.clipboard.writeText(r.data.ip);
+                          showToast(`Server IP: ${r.data.ip} — copied to clipboard`, 'success');
+                        } catch (err: any) {
+                          showToast(err.response?.data?.error || 'Could not get IP', 'error');
+                        }
+                      }}>📋 Copy Server IP</button>
+                  </div>
+                  {/* Step 2 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '0.9rem 1rem', flexWrap: 'wrap' }}>
+                    <span style={{ background: '#6366f1', color: '#fff', borderRadius: '50%', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.85rem', flexShrink: 0 }}>2</span>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>Whitelist the IP in UnlockBase</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Log in → Reseller Panel → API Settings → add the IP above</div>
+                    </div>
+                    <button className="tool-btn" style={{ height: '2.2rem', padding: '0 1rem', flexShrink: 0 }}
+                      onClick={async () => {
+                        try {
+                          const r = await api.get('/admin/unlockbase/balance');
+                          showToast(`✅ Connected! UB Balance: $${parseFloat(r.data.balance).toFixed(2)}`, 'success');
+                        } catch (err: any) {
+                          showToast(err.response?.data?.error || 'Not connected — IP not whitelisted yet?', 'error');
+                        }
+                      }}>🔌 Test Connection</button>
+                  </div>
+                  {/* Step 3 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '0.9rem 1rem', flexWrap: 'wrap' }}>
+                    <span style={{ background: '#6366f1', color: '#fff', borderRadius: '50%', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.85rem', flexShrink: 0 }}>3</span>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>Auto-map services from UnlockBase</div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Fetches your UB service catalogue and matches to local services — makes them ✅ LIVE</div>
+                    </div>
+                    <button className="tool-btn accent" style={{ height: '2.2rem', padding: '0 1rem', flexShrink: 0 }}
+                      onClick={async () => {
+                        showToast('Auto-mapping from UnlockBase…', 'loading');
+                        try {
+                          const r = await api.post('/admin/unlockbase/auto-map');
+                          showToast(`✅ ${r.data.matched} services mapped from ${r.data.ub_services} UB services`, 'success');
+                          fetchAdminServices();
+                        } catch (err: any) {
+                          showToast(err.response?.data?.error || 'Auto-map failed', 'error');
+                        }
+                      }}>⚡ Auto-Map & Activate</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* API Provider Mapping Table */}
               <div className="stat-card" style={{ padding: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                   <div>
-                    <div style={{ fontWeight: 700, marginBottom: 4 }}>🔗 API Provider Mapping — All Services</div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>🔗 Service ID Mapping — All Services</div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                      Map each service to GsmServer and/or UnlockBase service IDs. GsmServer is tried first, then UnlockBase.
+                      ✅ LIVE = has UnlockBase ID (auto-processed) &nbsp;|&nbsp; ⚠ MANUAL = no API ID (you fulfill manually)
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0, flexWrap: 'wrap' }}>
-                    <button
-                      className="tool-btn"
-                      style={{ height: '2.5rem', padding: '0 1.2rem', background: 'rgba(52,211,153,0.12)', borderColor: '#34d399', color: '#34d399' }}
-                      onClick={async () => {
-                        showToast('Syncing from GsmServer…', 'loading');
-                        try {
-                          const r = await api.post('/admin/gsmserver/sync');
-                          showToast(`✅ Matched ${r.data.matched} services from GsmServer`, 'success');
-                          fetchAdminServices();
-                        } catch (err: any) {
-                          showToast(err.response?.data?.error || 'GsmServer sync failed', 'error');
-                        }
-                      }}
-                    >🔄 Auto-Map GsmServer</button>
                     <button className="tool-btn" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveGsmServerMappings}>💾 Save GSM IDs</button>
                     <button className="tool-btn accent" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveServiceMappings}>💾 Save UB IDs</button>
                   </div>
@@ -1482,8 +1532,8 @@ const App: React.FC = () => {
                             {hasGsm
                               ? <span className="status-pill success">✅ GSM</span>
                               : hasUb
-                                ? <span className="status-pill" style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>✅ UB</span>
-                                : <span className="status-pill success">✅ LIVE</span>}
+                                ? <span className="status-pill success">✅ LIVE</span>
+                                : <span className="status-pill warning">⚠ MANUAL</span>}
                           </td>
                           <td>
                             <input
