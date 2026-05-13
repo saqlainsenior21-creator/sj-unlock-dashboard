@@ -167,10 +167,15 @@ const getSetting  = (key, fallback = null) => { const r = db.prepare('SELECT val
 const setSetting  = (key, value) => db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 
 // Apply global profit margin to a cost price
-function applyMargin(costPrice, marginPct) {
+// Minimum floors: checks $0.49, file $4.99, everything else $5.99
+function applyMargin(costPrice, marginPct, type) {
   if (!marginPct || marginPct <= 0) return null;
-  const retail = costPrice * (1 + marginPct / 100);
-  return Math.ceil(retail * 100 - 1) / 100; // round up to nearest .99
+  const raw = costPrice * (1 + marginPct / 100);
+  // Round up to nearest .99 (e.g. $5.10 → $5.99, $16.20 → $16.99)
+  const rounded = Math.ceil(raw) - 0.01;
+  const floors = { check: 0.49, file: 4.99 };
+  const floor = floors[type] || 5.99;
+  return Math.max(rounded, floor);
 }
 addColIfMissing('services', 'cost_price', 'REAL DEFAULT 0');
 addColIfMissing('services', 'api_service_id', 'TEXT');
@@ -1285,7 +1290,7 @@ app.post('/api/admin/gsmserver/sync', authenticate, requireAdmin, async (req, re
   const marginPct = parseFloat(getSetting('global_margin_pct', '0')) || 0;
   const updateCost  = db.prepare('UPDATE services SET cost_price=?, gsmserver_service_id=? WHERE id=?');
   const updatePrice = db.prepare('UPDATE services SET cost_price=?, gsmserver_service_id=?, price=? WHERE id=?');
-  const allServices = db.prepare('SELECT id, name, cost_price FROM services').all();
+  const allServices = db.prepare('SELECT id, name, cost_price, type FROM services').all();
 
   let matched = 0, updated = 0;
   for (const gsm of services) {
@@ -1304,7 +1309,7 @@ app.post('/api/admin/gsmserver/sync', authenticate, requireAdmin, async (req, re
     matched++;
 
     if (gsmPrice > 0 && marginPct > 0) {
-      const retail = applyMargin(gsmPrice, marginPct);
+      const retail = applyMargin(gsmPrice, marginPct, local.type);
       updatePrice.run(gsmPrice, gsmId, retail, local.id);
     } else if (gsmPrice > 0) {
       updateCost.run(gsmPrice, gsmId, local.id);
@@ -1334,11 +1339,11 @@ app.post('/api/admin/settings/margin', authenticate, requireAdmin, (req, res) =>
   setSetting('global_margin_pct', pct);
 
   // Recalculate all retail prices from cost_price
-  const services = db.prepare('SELECT id, cost_price FROM services WHERE cost_price > 0').all();
+  const services = db.prepare('SELECT id, cost_price, type FROM services WHERE cost_price > 0').all();
   const update   = db.prepare('UPDATE services SET price=? WHERE id=?');
   const applyAll = db.transaction(() => {
     for (const s of services) {
-      const retail = applyMargin(s.cost_price, pct);
+      const retail = applyMargin(s.cost_price, pct, s.type);
       if (retail) update.run(retail, s.id);
     }
   });
@@ -1691,7 +1696,7 @@ app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '4.5',
+    version: '4.6',
     unlockApi:    !!UNLOCK_API_KEY,
     sickwApi:     !!SICKW_API_KEY,
     imeiCheckApi: !!IMEI_CHECK_API_KEY,
