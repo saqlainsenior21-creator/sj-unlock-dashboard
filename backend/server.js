@@ -1099,12 +1099,12 @@ app.get('/api/admin/stats', authenticate, requireAdmin, (req, res) => {
     failed:          orderStats.failed,
     cancelled:       orderStats.cancelled,
     user_count:      userCount,
-    total_user_balance: parseFloat(totalBalance).toFixed(2),
+    total_user_balance: parseFloat(totalBalance),
     pending_topups:  pendingTopups,
-    total_deposited: parseFloat(totalDeposited).toFixed(2),
-    total_revenue:   revenue.toFixed(2),
-    total_cost:      cost.toFixed(2),
-    total_profit:    (revenue - cost).toFixed(2),
+    total_deposited: parseFloat(totalDeposited),
+    total_revenue:   revenue,
+    total_cost:      cost,
+    total_profit:    parseFloat((revenue - cost).toFixed(2)),
     by_category:     byCategory,
     daily_revenue:   daily,
   });
@@ -1696,7 +1696,7 @@ app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '4.6',
+    version: '4.7',
     unlockApi:    !!UNLOCK_API_KEY,
     sickwApi:     !!SICKW_API_KEY,
     imeiCheckApi: !!IMEI_CHECK_API_KEY,
