@@ -300,6 +300,9 @@ const App: React.FC = () => {
   const [bcSubject, setBcSubject] = useState('');
   const [bcBody, setBcBody] = useState('');
   const [bcSending, setBcSending] = useState(false);
+  const [globalMargin, setGlobalMargin] = useState<number>(0);
+  const [marginInput, setMarginInput] = useState<string>('');
+  const [marginSaving, setMarginSaving] = useState(false);
 
   const [showAuth, setShowAuth] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -509,10 +512,16 @@ const App: React.FC = () => {
 
   const fetchAdminServices = async () => {
     try {
-      const res = await api.get('/admin/services');
-      setAdminServices(res.data);
+      const [svcRes, marginRes] = await Promise.all([
+        api.get('/admin/services'),
+        api.get('/admin/settings/margin'),
+      ]);
+      setAdminServices(svcRes.data);
+      const pct = marginRes.data.global_margin_pct ?? 0;
+      setGlobalMargin(pct);
+      setMarginInput(String(pct));
       const edits: Record<number, string> = {};
-      res.data.forEach((s: any) => { edits[s.id] = s.api_service_id || ''; });
+      svcRes.data.forEach((s: any) => { edits[s.id] = s.api_service_id || ''; });
       setServiceIdEdits(edits);
     } catch { /* ignore */ }
   };
@@ -1295,6 +1304,50 @@ const App: React.FC = () => {
             {adminTab === 'services' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
 
+              {/* Global Profit Margin Panel */}
+              <div className="stat-card" style={{ padding: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>💰 Global Profit Margin</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      Set a % markup applied to all service cost prices when auto-pricing. Current: <strong style={{ color: '#a78bfa' }}>{globalMargin}%</strong>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      type="number"
+                      min="0"
+                      max="500"
+                      value={marginInput}
+                      onChange={e => setMarginInput(e.target.value)}
+                      style={{ width: 80, padding: '0.4rem 0.6rem', background: 'var(--input-bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-primary)', fontSize: '0.9rem' }}
+                      placeholder="e.g. 30"
+                    />
+                    <span style={{ color: 'var(--text-secondary)' }}>%</span>
+                    <button
+                      className="tool-btn accent"
+                      style={{ height: '2.2rem', padding: '0 1rem' }}
+                      disabled={marginSaving}
+                      onClick={async () => {
+                        const pct = parseFloat(marginInput);
+                        if (isNaN(pct) || pct < 0) { showToast('Enter a valid margin %', 'error'); return; }
+                        setMarginSaving(true);
+                        try {
+                          await api.post('/admin/settings/margin', { global_margin_pct: pct });
+                          setGlobalMargin(pct);
+                          showToast(`Global margin set to ${pct}%`, 'success');
+                          fetchAdminServices();
+                        } catch (err: any) {
+                          showToast(err.response?.data?.error || 'Failed to save margin', 'error');
+                        } finally { setMarginSaving(false); }
+                      }}
+                    >
+                      {marginSaving ? 'Saving…' : '✓ Apply'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* SickW Sync Panel */}
               <div className="stat-card" style={{ padding: '1.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -1360,14 +1413,22 @@ const App: React.FC = () => {
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="admin-table">
-                    <thead><tr><th>#</th><th>SERVICE NAME</th><th>TYPE</th><th>PRICE</th><th>API STATUS</th><th>UNLOCKBASE SERVICE ID</th></tr></thead>
+                    <thead><tr><th>#</th><th>SERVICE NAME</th><th>TYPE</th><th>COST</th><th>PRICE</th><th>PROFIT</th><th>MARGIN</th><th>API STATUS</th><th>UNLOCKBASE ID</th></tr></thead>
                     <tbody>
-                      {adminServices.filter((s: any) => ['imei', 'remote', 'check'].includes(s.type)).map((s: any) => (
+                      {adminServices.filter((s: any) => ['imei', 'remote', 'check'].includes(s.type)).map((s: any) => {
+                        const cost   = parseFloat(s.cost_price) || 0;
+                        const price  = parseFloat(s.price) || 0;
+                        const profit = price - cost;
+                        const margin = cost > 0 ? ((profit / cost) * 100).toFixed(0) : '—';
+                        return (
                         <tr key={s.id}>
                           <td style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>#{s.id}</td>
-                          <td style={{ fontSize: '0.8rem', maxWidth: 260 }}>{s.name}</td>
+                          <td style={{ fontSize: '0.8rem', maxWidth: 220 }}>{s.name}</td>
                           <td><span className="status-pill" style={{ background: 'rgba(99,102,241,0.15)', color: '#a78bfa' }}>{s.type.toUpperCase()}</span></td>
-                          <td style={{ fontFamily: 'monospace', color: 'var(--success)' }}>${s.price?.toFixed(2)}</td>
+                          <td style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>${cost.toFixed(2)}</td>
+                          <td style={{ fontFamily: 'monospace', color: 'var(--success)', fontWeight: 700 }}>${price.toFixed(2)}</td>
+                          <td style={{ fontFamily: 'monospace', color: '#10b981', fontWeight: 700 }}>${profit.toFixed(2)}</td>
+                          <td style={{ fontFamily: 'monospace', color: '#a78bfa', fontSize: '0.8rem' }}>{margin}%</td>
                           <td>
                             {s.api_service_id
                               ? <span className="status-pill success">✅ LIVE</span>
@@ -1380,11 +1441,12 @@ const App: React.FC = () => {
                               value={serviceIdEdits[s.id] || ''}
                               onChange={e => setServiceIdEdits(p => ({ ...p, [s.id]: e.target.value }))}
                               className="admin-mini-input"
-                              style={{ width: 120, fontFamily: 'monospace' }}
+                              style={{ width: 100, fontFamily: 'monospace' }}
                             />
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
