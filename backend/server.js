@@ -147,6 +147,10 @@ db.exec(`
     reviewed_at DATETIME,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // ─── Safe column migrations (idempotent) ─────────────────────────────────────
@@ -157,6 +161,17 @@ const addColIfMissing = (tbl, col, def) => {
     console.log(`Migration: added ${tbl}.${col}`);
   }
 };
+
+// ─── Settings helpers ─────────────────────────────────────────────────────────
+const getSetting  = (key, fallback = null) => { const r = db.prepare('SELECT value FROM settings WHERE key=?').get(key); return r ? r.value : fallback; };
+const setSetting  = (key, value) => db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
+
+// Apply global profit margin to a cost price
+function applyMargin(costPrice, marginPct) {
+  if (!marginPct || marginPct <= 0) return null;
+  const retail = costPrice * (1 + marginPct / 100);
+  return Math.ceil(retail * 100 - 1) / 100; // round up to nearest .99
+}
 addColIfMissing('services', 'cost_price', 'REAL DEFAULT 0');
 addColIfMissing('services', 'api_service_id', 'TEXT');
 addColIfMissing('orders', 'external_order_id', 'TEXT');
@@ -1259,6 +1274,79 @@ app.get('/api/admin/gsmserver/services', authenticate, requireAdmin, async (req,
   res.json(r.data);
 });
 
+// Admin: Sync GsmServer services — update cost prices + gsmserver_service_id
+app.post('/api/admin/gsmserver/sync', authenticate, requireAdmin, async (req, res) => {
+  const r = await gsmServerRequest({ action: 'getservices' });
+  if (!r.ok) return res.status(502).json({ error: r.error });
+
+  const services = Array.isArray(r.data) ? r.data : (r.data?.services || Object.values(r.data || {}));
+  if (!services.length) return res.status(502).json({ error: 'GsmServer returned empty service list' });
+
+  const marginPct = parseFloat(getSetting('global_margin_pct', '0')) || 0;
+  const updateCost  = db.prepare('UPDATE services SET cost_price=?, gsmserver_service_id=? WHERE id=?');
+  const updatePrice = db.prepare('UPDATE services SET cost_price=?, gsmserver_service_id=?, price=? WHERE id=?');
+  const allServices = db.prepare('SELECT id, name, cost_price FROM services').all();
+
+  let matched = 0, updated = 0;
+  for (const gsm of services) {
+    const gsmName  = (gsm.name || gsm.service_name || gsm.title || '').toLowerCase().trim();
+    const gsmPrice = parseFloat(gsm.price || gsm.cost || gsm.rate || 0);
+    const gsmId    = String(gsm.service_id || gsm.id || '');
+    if (!gsmName || !gsmId) continue;
+
+    // fuzzy match: GsmServer name contains our name or vice versa
+    const local = allServices.find(s => {
+      const n = s.name.toLowerCase();
+      return n.includes(gsmName) || gsmName.includes(n) ||
+             n.split(' ').filter(w => w.length > 4).every(w => gsmName.includes(w));
+    });
+    if (!local) continue;
+    matched++;
+
+    if (gsmPrice > 0 && marginPct > 0) {
+      const retail = applyMargin(gsmPrice, marginPct);
+      updatePrice.run(gsmPrice, gsmId, retail, local.id);
+    } else if (gsmPrice > 0) {
+      updateCost.run(gsmPrice, gsmId, local.id);
+    } else {
+      db.prepare('UPDATE services SET gsmserver_service_id=? WHERE id=?').run(gsmId, local.id);
+    }
+    updated++;
+  }
+
+  res.json({ ok: true, gsmserver_services: services.length, matched, updated, margin_applied: marginPct > 0 });
+});
+
+// ─── Global Profit Margin ─────────────────────────────────────────────────────
+
+// GET current margin setting
+app.get('/api/admin/settings/margin', authenticate, requireAdmin, (req, res) => {
+  const margin = parseFloat(getSetting('global_margin_pct', '0')) || 0;
+  res.json({ global_margin_pct: margin });
+});
+
+// SET margin and recalculate all retail prices
+app.post('/api/admin/settings/margin', authenticate, requireAdmin, (req, res) => {
+  const { margin_pct } = req.body;
+  const pct = parseFloat(margin_pct);
+  if (isNaN(pct) || pct < 0 || pct > 10000) return res.status(400).json({ error: 'margin_pct must be 0–10000' });
+
+  setSetting('global_margin_pct', pct);
+
+  // Recalculate all retail prices from cost_price
+  const services = db.prepare('SELECT id, cost_price FROM services WHERE cost_price > 0').all();
+  const update   = db.prepare('UPDATE services SET price=? WHERE id=?');
+  const applyAll = db.transaction(() => {
+    for (const s of services) {
+      const retail = applyMargin(s.cost_price, pct);
+      if (retail) update.run(retail, s.id);
+    }
+  });
+  applyAll();
+
+  res.json({ ok: true, global_margin_pct: pct, services_repriced: services.length });
+});
+
 // User: get result/unlock code for their order
 app.get('/api/orders/:id/result', authenticate, (req, res) => {
   const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?')
@@ -1603,7 +1691,7 @@ app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '4.4',
+    version: '4.5',
     unlockApi:    !!UNLOCK_API_KEY,
     sickwApi:     !!SICKW_API_KEY,
     imeiCheckApi: !!IMEI_CHECK_API_KEY,
@@ -1612,6 +1700,7 @@ app.get('/api/health', (req, res) => {
     wipay:        !!WIPAY_ACCOUNT_NUMBER,
     elbroos:      !!(ELBROOS_USERNAME && ELBROOS_API_KEY),
     gsmserver:    !!(GSMSERVER_USERNAME && GSMSERVER_API_KEY),
+    global_margin: parseFloat(getSetting('global_margin_pct', '0')) || 0,
     services: db.prepare('SELECT count(*) as c FROM services').get().c,
   });
 });
