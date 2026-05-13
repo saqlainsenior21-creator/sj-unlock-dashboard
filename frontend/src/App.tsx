@@ -1426,9 +1426,23 @@ const App: React.FC = () => {
                       Map each service to GsmServer and/or UnlockBase service IDs. GsmServer is tried first, then UnlockBase.
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                    <button className="tool-btn" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveGsmServerMappings}>💾 Save GsmServer IDs</button>
-                    <button className="tool-btn accent" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveServiceMappings}>💾 Save UnlockBase IDs</button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0, flexWrap: 'wrap' }}>
+                    <button
+                      className="tool-btn"
+                      style={{ height: '2.5rem', padding: '0 1.2rem', background: 'rgba(52,211,153,0.12)', borderColor: '#34d399', color: '#34d399' }}
+                      onClick={async () => {
+                        showToast('Syncing from GsmServer…', 'loading');
+                        try {
+                          const r = await api.post('/admin/gsmserver/sync');
+                          showToast(`✅ Matched ${r.data.matched} services from GsmServer`, 'success');
+                          fetchAdminServices();
+                        } catch (err: any) {
+                          showToast(err.response?.data?.error || 'GsmServer sync failed', 'error');
+                        }
+                      }}
+                    >🔄 Auto-Map GsmServer</button>
+                    <button className="tool-btn" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveGsmServerMappings}>💾 Save GSM IDs</button>
+                    <button className="tool-btn accent" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveServiceMappings}>💾 Save UB IDs</button>
                   </div>
                 </div>
                 <div style={{ overflowX: 'auto' }}>
@@ -1468,8 +1482,8 @@ const App: React.FC = () => {
                             {hasGsm
                               ? <span className="status-pill success">✅ GSM</span>
                               : hasUb
-                                ? <span className="status-pill" style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>🔵 UB</span>
-                                : <span className="status-pill warning">⚠ MANUAL</span>}
+                                ? <span className="status-pill" style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>✅ UB</span>
+                                : <span className="status-pill success">✅ LIVE</span>}
                           </td>
                           <td>
                             <input
