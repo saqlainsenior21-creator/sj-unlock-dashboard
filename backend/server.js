@@ -29,6 +29,11 @@ const ELBROOS_USERNAME = process.env.ELBROOS_USERNAME || '';
 const ELBROOS_API_KEY  = process.env.ELBROOS_API_KEY  || 'b9c2a1f0567f9f40c10a2ea595dcaf98';
 const ELBROOS_BASE_URL = 'https://api-gsm.elbroos.com/api/v1';
 
+// GsmServer.com API
+const GSMSERVER_USERNAME = process.env.GSMSERVER_USERNAME || '';
+const GSMSERVER_API_KEY  = process.env.GSMSERVER_API_KEY  || '';
+const GSMSERVER_BASE_URL = 'https://www.gsmserver.com/api/';
+
 // WiPay Caribbean (credit/debit card payments — Jamaica & Caribbean)
 const WIPAY_ACCOUNT_NUMBER = process.env.WIPAY_ACCOUNT_NUMBER || '';
 const WIPAY_API_KEY        = process.env.WIPAY_API_KEY        || '';
@@ -161,6 +166,7 @@ addColIfMissing('topup_requests', 'wipay_tx_id', 'TEXT');
 addColIfMissing('topup_requests', 'wipay_order_id', 'TEXT');
 // Public order columns (guest orders from website)
 addColIfMissing('services', 'elbroos_service_id', 'TEXT');
+addColIfMissing('services', 'gsmserver_service_id', 'TEXT');
 addColIfMissing('orders', 'provider', "TEXT DEFAULT 'unlockbase'");
 addColIfMissing('orders', 'email', 'TEXT');
 addColIfMissing('orders', 'notes', 'TEXT');
@@ -513,6 +519,53 @@ function mapElbroosStatus(data) {
   return null;
 }
 
+// ─── GsmServer.com API Integration ───────────────────────────────────────────
+function mapGsmServerStatus(status) {
+  if (!status) return null;
+  const s = String(status).toLowerCase();
+  if (s.includes('complet') || s.includes('unlock') || s.includes('done') || s.includes('success')) return 'completed';
+  if (s.includes('fail') || s.includes('reject') || s.includes('error') || s.includes('invalid')) return 'failed';
+  if (s.includes('cancel')) return 'cancelled';
+  return null;
+}
+
+async function gsmServerRequest(params) {
+  if (!GSMSERVER_USERNAME || !GSMSERVER_API_KEY) return { ok: false, error: 'GSMSERVER_USERNAME / GSMSERVER_API_KEY not configured' };
+  try {
+    const body = new URLSearchParams({ login: GSMSERVER_USERNAME, apikey: GSMSERVER_API_KEY, ...params });
+    const { data } = await axios.post(GSMSERVER_BASE_URL, body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 20000,
+    });
+    return { ok: true, data };
+  } catch (err) {
+    const msg = err.response?.data?.error || err.message;
+    console.error('[GsmServer]', params.action, 'error:', msg);
+    return { ok: false, error: msg };
+  }
+}
+
+async function submitToGsmServer(serviceId, imei) {
+  if (!GSMSERVER_USERNAME || !GSMSERVER_API_KEY) return { success: false, reason: 'GsmServer not configured — set GSMSERVER_USERNAME and GSMSERVER_API_KEY' };
+  const r = await gsmServerRequest({ action: 'addorder', service_id: String(serviceId), imei });
+  if (!r.ok) return { success: false, reason: r.error };
+  const d = r.data;
+  if (d?.order_id) return { success: true, orderId: String(d.order_id), apiStatus: d.status || 'in process' };
+  if (d?.error)    return { success: false, reason: d.error };
+  return { success: false, reason: 'Unexpected GsmServer response', raw: d };
+}
+
+async function checkGsmServerOrder(externalOrderId) {
+  if (!GSMSERVER_USERNAME || !GSMSERVER_API_KEY || !externalOrderId) return null;
+  const r = await gsmServerRequest({ action: 'getorderstatus', order_id: String(externalOrderId) });
+  return r.ok ? r.data : null;
+}
+
+async function getGsmServerBalance() {
+  const r = await gsmServerRequest({ action: 'getbalance' });
+  return r.ok ? r.data : null;
+}
+
 async function pollPendingOrders() {
   const now = Date.now();
   const pending = db.prepare(
@@ -527,7 +580,20 @@ async function pollPendingOrders() {
 
     const provider = order.provider || 'unlockbase';
 
-    if (provider === 'elbroos') {
+    if (provider === 'gsmserver') {
+      const result = await checkGsmServerOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapGsmServerStatus(result.status || result.Status);
+      const unlockCode = result.unlock_code || result.code || result.Code || null;
+      if (mapped && mapped !== 'in process') {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.status || mapped, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+        console.log(`[GsmServer Poller] Order #${order.id} → ${mapped}`);
+      } else {
+        db.prepare('UPDATE orders SET api_status = ? WHERE id = ?').run(result.status || 'in process', order.id);
+      }
+    } else if (provider === 'elbroos') {
       const result = await checkElbroosOrder(order.external_order_id);
       if (!result) continue;
       const mapped = mapElbroosStatus(result);
@@ -570,7 +636,17 @@ setInterval(async () => {
   console.log(`[Poller-10m] Checking ${pending.length} pending order(s)...`);
   for (const order of pending) {
     const provider = order.provider || 'unlockbase';
-    if (provider === 'elbroos') {
+    if (provider === 'gsmserver') {
+      const result = await checkGsmServerOrder(order.external_order_id);
+      if (!result) continue;
+      const mapped = mapGsmServerStatus(result.status || result.Status);
+      const unlockCode = result.unlock_code || result.code || result.Code || null;
+      if (mapped) {
+        db.prepare('UPDATE orders SET status = ?, api_status = ?, result = ? WHERE id = ?')
+          .run(mapped, result.status || mapped, unlockCode ? JSON.stringify({ code: unlockCode, raw: result }) : null, order.id);
+        io.emit('order_updated');
+      }
+    } else if (provider === 'elbroos') {
       const result = await checkElbroosOrder(order.external_order_id);
       if (!result) continue;
       const mapped = mapElbroosStatus(result);
@@ -866,9 +942,20 @@ app.post('/api/orders', authenticate, requireSub, async (req, res) => {
   const updatedUser = db.prepare('SELECT balance FROM users WHERE id = ?').get(user.id);
   io.emit('order_updated');
 
-  // Submit to provider (Elbroos preferred, fallback to UnlockBase) — non-blocking
+  // Submit to provider (GsmServer → Elbroos → UnlockBase) — non-blocking
   if (imei) {
-    if (service.elbroos_service_id) {
+    if (service.gsmserver_service_id && GSMSERVER_USERNAME && GSMSERVER_API_KEY) {
+      submitToGsmServer(service.gsmserver_service_id, imei).then((r) => {
+        if (r.success) {
+          db.prepare("UPDATE orders SET external_order_id=?, api_status=?, provider='gsmserver' WHERE id=?")
+            .run(r.orderId, r.apiStatus, orderId);
+          console.log(`[GsmServer] Order #${orderId} submitted → ID: ${r.orderId}`);
+        } else {
+          console.warn(`[GsmServer] Order #${orderId} failed: ${r.reason}`);
+        }
+        io.emit('order_updated');
+      }).catch(err => console.error('[GsmServer] Async error:', err.message));
+    } else if (service.elbroos_service_id) {
       submitToElbroos(service.elbroos_service_id, imei).then((r) => {
         if (r.success) {
           db.prepare("UPDATE orders SET external_order_id=?, api_status=?, provider='elbroos' WHERE id=?")
@@ -897,7 +984,7 @@ app.post('/api/orders', authenticate, requireSub, async (req, res) => {
     message: 'Order placed successfully',
     balance: updatedUser.balance,
     order_id: orderId,
-    api_connected: !!(service.elbroos_service_id || service.api_service_id),
+    api_connected: !!(service.gsmserver_service_id || service.elbroos_service_id || service.api_service_id),
   });
 });
 
@@ -1146,6 +1233,30 @@ app.post('/api/admin/services/map-elbroos', authenticate, requireAdmin, (req, re
   const doAll = db.transaction(() => mappings.forEach(m => update.run(m.elbroos_service_id || null, m.id)));
   doAll();
   res.json({ ok: true, updated: mappings.length });
+});
+
+// Admin: map GsmServer service IDs (bulk)
+app.post('/api/admin/services/map-gsmserver', authenticate, requireAdmin, (req, res) => {
+  const { mappings } = req.body; // [{ id, gsmserver_service_id }]
+  if (!Array.isArray(mappings)) return res.status(400).json({ error: 'mappings array required' });
+  const update = db.prepare('UPDATE services SET gsmserver_service_id = ? WHERE id = ?');
+  const doAll = db.transaction(() => mappings.forEach(m => update.run(m.gsmserver_service_id || null, m.id)));
+  doAll();
+  res.json({ ok: true, updated: mappings.length });
+});
+
+// Admin: GsmServer account balance
+app.get('/api/admin/gsmserver/balance', authenticate, requireAdmin, async (req, res) => {
+  const data = await getGsmServerBalance();
+  if (!data) return res.status(502).json({ error: 'GsmServer request failed or not configured' });
+  res.json(data);
+});
+
+// Admin: GsmServer service list
+app.get('/api/admin/gsmserver/services', authenticate, requireAdmin, async (req, res) => {
+  const r = await gsmServerRequest({ action: 'getservices' });
+  if (!r.ok) return res.status(502).json({ error: r.error });
+  res.json(r.data);
 });
 
 // User: get result/unlock code for their order
@@ -1492,7 +1603,7 @@ app.get('/api/admin/server-ip', authenticate, requireAdmin, async (req, res) => 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '4.2',
+    version: '4.3',
     unlockApi:    !!UNLOCK_API_KEY,
     sickwApi:     !!SICKW_API_KEY,
     imeiCheckApi: !!IMEI_CHECK_API_KEY,
@@ -1500,6 +1611,7 @@ app.get('/api/health', (req, res) => {
     stripe:       !!stripe,
     wipay:        !!WIPAY_ACCOUNT_NUMBER,
     elbroos:      !!(ELBROOS_USERNAME && ELBROOS_API_KEY),
+    gsmserver:    !!(GSMSERVER_USERNAME && GSMSERVER_API_KEY),
     services: db.prepare('SELECT count(*) as c FROM services').get().c,
   });
 });
