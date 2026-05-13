@@ -303,6 +303,7 @@ const App: React.FC = () => {
   const [globalMargin, setGlobalMargin] = useState<number>(0);
   const [marginInput, setMarginInput] = useState<string>('');
   const [marginSaving, setMarginSaving] = useState(false);
+  const [gsmServerIdEdits, setGsmServerIdEdits] = useState<Record<number, string>>({});
 
   const [showAuth, setShowAuth] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -521,8 +522,13 @@ const App: React.FC = () => {
       setGlobalMargin(pct);
       setMarginInput(String(pct));
       const edits: Record<number, string> = {};
-      svcRes.data.forEach((s: any) => { edits[s.id] = s.api_service_id || ''; });
+      const gsmEdits: Record<number, string> = {};
+      svcRes.data.forEach((s: any) => {
+        edits[s.id] = s.api_service_id || '';
+        gsmEdits[s.id] = s.gsmserver_service_id || '';
+      });
       setServiceIdEdits(edits);
+      setGsmServerIdEdits(gsmEdits);
     } catch { /* ignore */ }
   };
 
@@ -530,7 +536,16 @@ const App: React.FC = () => {
     const mappings = adminServices.map((s: any) => ({ id: s.id, api_service_id: serviceIdEdits[s.id] || null }));
     try {
       await api.post('/admin/services/map', { mappings });
-      showToast('Service IDs saved!', 'success');
+      showToast('UnlockBase IDs saved!', 'success');
+      fetchAdminServices();
+    } catch (err: any) { showToast(err.response?.data?.error || 'Save failed', 'error'); }
+  };
+
+  const saveGsmServerMappings = async () => {
+    const mappings = adminServices.map((s: any) => ({ id: s.id, gsmserver_service_id: gsmServerIdEdits[s.id] || null }));
+    try {
+      await api.post('/admin/services/map-gsmserver', { mappings });
+      showToast('GsmServer IDs saved!', 'success');
       fetchAdminServices();
     } catch (err: any) { showToast(err.response?.data?.error || 'Save failed', 'error'); }
   };
@@ -1402,46 +1417,78 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              {/* UnlockBase Mapping */}
+              {/* API Provider Mapping */}
               <div className="stat-card" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                   <div>
-                    <div style={{ fontWeight: 700, marginBottom: 4 }}>UnlockBase API Service ID Mapping</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Enter the UnlockBase service ID for each service to enable auto-processing. Leave blank for manual fulfillment.</div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>🔗 API Provider Mapping — All Services</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      Map each service to GsmServer and/or UnlockBase service IDs. GsmServer is tried first, then UnlockBase.
+                    </div>
                   </div>
-                  <button className="tool-btn accent" style={{ height: '2.5rem', padding: '0 1.5rem', flexShrink: 0 }} onClick={saveServiceMappings}>Save All</button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                    <button className="tool-btn" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveGsmServerMappings}>💾 Save GsmServer IDs</button>
+                    <button className="tool-btn accent" style={{ height: '2.5rem', padding: '0 1.2rem' }} onClick={saveServiceMappings}>💾 Save UnlockBase IDs</button>
+                  </div>
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="admin-table">
-                    <thead><tr><th>#</th><th>SERVICE NAME</th><th>TYPE</th><th>COST</th><th>PRICE</th><th>PROFIT</th><th>MARGIN</th><th>API STATUS</th><th>UNLOCKBASE ID</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>SERVICE NAME</th>
+                        <th>TYPE</th>
+                        <th>COST</th>
+                        <th>PRICE</th>
+                        <th>PROFIT</th>
+                        <th>MARGIN</th>
+                        <th>STATUS</th>
+                        <th style={{ color: '#34d399' }}>GSMSERVER ID</th>
+                        <th style={{ color: '#60a5fa' }}>UNLOCKBASE ID</th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {adminServices.filter((s: any) => ['imei', 'remote', 'check'].includes(s.type)).map((s: any) => {
+                      {adminServices.map((s: any) => {
                         const cost   = parseFloat(s.cost_price) || 0;
                         const price  = parseFloat(s.price) || 0;
                         const profit = price - cost;
                         const margin = cost > 0 ? ((profit / cost) * 100).toFixed(0) : '—';
+                        const hasGsm = !!(s.gsmserver_service_id || gsmServerIdEdits[s.id]);
+                        const hasUb  = !!(s.api_service_id || serviceIdEdits[s.id]);
                         return (
                         <tr key={s.id}>
                           <td style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>#{s.id}</td>
-                          <td style={{ fontSize: '0.8rem', maxWidth: 220 }}>{s.name}</td>
+                          <td style={{ fontSize: '0.8rem', maxWidth: 200 }}>{s.name}</td>
                           <td><span className="status-pill" style={{ background: 'rgba(99,102,241,0.15)', color: '#a78bfa' }}>{s.type.toUpperCase()}</span></td>
                           <td style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>${cost.toFixed(2)}</td>
                           <td style={{ fontFamily: 'monospace', color: 'var(--success)', fontWeight: 700 }}>${price.toFixed(2)}</td>
                           <td style={{ fontFamily: 'monospace', color: '#10b981', fontWeight: 700 }}>${profit.toFixed(2)}</td>
                           <td style={{ fontFamily: 'monospace', color: '#a78bfa', fontSize: '0.8rem' }}>{margin}%</td>
                           <td>
-                            {s.api_service_id
-                              ? <span className="status-pill success">✅ LIVE</span>
-                              : <span className="status-pill warning">⚠ MANUAL</span>}
+                            {hasGsm
+                              ? <span className="status-pill success">✅ GSM</span>
+                              : hasUb
+                                ? <span className="status-pill" style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>🔵 UB</span>
+                                : <span className="status-pill warning">⚠ MANUAL</span>}
                           </td>
                           <td>
                             <input
                               type="text"
-                              placeholder="e.g. 12345"
+                              placeholder="GSM ID"
+                              value={gsmServerIdEdits[s.id] || ''}
+                              onChange={e => setGsmServerIdEdits(p => ({ ...p, [s.id]: e.target.value }))}
+                              className="admin-mini-input"
+                              style={{ width: 90, fontFamily: 'monospace', borderColor: '#34d399' }}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              placeholder="UB ID"
                               value={serviceIdEdits[s.id] || ''}
                               onChange={e => setServiceIdEdits(p => ({ ...p, [s.id]: e.target.value }))}
                               className="admin-mini-input"
-                              style={{ width: 100, fontFamily: 'monospace' }}
+                              style={{ width: 90, fontFamily: 'monospace', borderColor: '#60a5fa' }}
                             />
                           </td>
                         </tr>
