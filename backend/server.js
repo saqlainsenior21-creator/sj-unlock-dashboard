@@ -34,6 +34,19 @@ const GSMSERVER_USERNAME = process.env.GSMSERVER_USERNAME || '';
 const GSMSERVER_API_KEY  = process.env.GSMSERVER_API_KEY  || '';
 const GSMSERVER_BASE_URL = 'https://www.gsmserver.com/api/';
 
+// PayPal REST API
+const PAYPAL_CLIENT_ID     = process.env.PAYPAL_CLIENT_ID     || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_BASE          = 'https://api-m.paypal.com';
+
+async function getPayPalToken() {
+  const { data } = await axios.post(`${PAYPAL_BASE}/v1/oauth2/token`,
+    'grant_type=client_credentials',
+    { auth: { username: PAYPAL_CLIENT_ID, password: PAYPAL_CLIENT_SECRET },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 });
+  return data.access_token;
+}
+
 // WiPay Caribbean (credit/debit card payments — Jamaica & Caribbean)
 const WIPAY_ACCOUNT_NUMBER = process.env.WIPAY_ACCOUNT_NUMBER || '';
 const WIPAY_API_KEY        = process.env.WIPAY_API_KEY        || '';
@@ -1608,6 +1621,104 @@ app.get('/api/payment/wipay/status', authenticate, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Order not found' });
   const updatedUser = db.prepare('SELECT balance FROM users WHERE id=?').get(req.user.id);
   res.json({ status: row.status, amount: row.amount, balance: updatedUser.balance });
+});
+
+// ─── PayPal — Balance Top-Up ─────────────────────────────────────────────────
+
+// Step 1: create PayPal order, return approvalUrl
+app.post('/api/payment/paypal/create-order', authenticate, async (req, res) => {
+  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET)
+    return res.status(503).json({ error: 'PayPal not configured. Contact admin.' });
+
+  const amount = parseFloat(req.body.amount);
+  if (!amount || isNaN(amount) || amount < 1)
+    return res.status(400).json({ error: 'Minimum top-up is $1.00 USD' });
+
+  try {
+    const token = await getPayPalToken();
+    const { data } = await axios.post(`${PAYPAL_BASE}/v2/checkout/orders`, {
+      intent: 'CAPTURE',
+      purchase_units: [{
+        amount: { currency_code: 'USD', value: amount.toFixed(2) },
+        description: `S&J Unlock — Balance Top-Up $${amount.toFixed(2)} USD`,
+        custom_id: `${req.user.id}`,
+      }],
+      application_context: {
+        brand_name: 'S&J UNLOCK',
+        landing_page: 'BILLING',
+        user_action: 'PAY_NOW',
+        return_url: `${APP_URL}/dashboard?paypal=success`,
+        cancel_url: `${APP_URL}/dashboard?paypal=cancel`,
+      },
+    }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+
+    const approvalUrl = data.links.find(l => l.rel === 'approve')?.href;
+    db.prepare('INSERT INTO topup_requests (user_id, amount, reference, method, status) VALUES (?,?,?,?,?)').run(
+      req.user.id, amount, data.id, 'paypal', 'pending'
+    );
+    res.json({ orderId: data.id, approvalUrl });
+  } catch (err) {
+    console.error('[PayPal] create-order error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'PayPal error. Please try again or contact support.' });
+  }
+});
+
+// Step 2: capture after user approves on PayPal
+app.post('/api/payment/paypal/capture-order', authenticate, async (req, res) => {
+  const { orderId } = req.body;
+  if (!orderId) return res.status(400).json({ error: 'orderId required' });
+
+  const topup = db.prepare("SELECT * FROM topup_requests WHERE reference=? AND user_id=? AND method='paypal'").get(orderId, req.user.id);
+  if (!topup) return res.status(404).json({ error: 'Order not found' });
+  if (topup.status === 'approved') return res.json({ ok: true, message: 'Already credited', balance: db.prepare('SELECT balance FROM users WHERE id=?').get(req.user.id).balance });
+
+  try {
+    const token = await getPayPalToken();
+    const { data } = await axios.post(`${PAYPAL_BASE}/v2/checkout/orders/${orderId}/capture`, {},
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+
+    if (data.status === 'COMPLETED') {
+      const paid = parseFloat(data.purchase_units[0].payments.captures[0].amount.value);
+      db.transaction(() => {
+        db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(paid, req.user.id);
+        db.prepare("UPDATE topup_requests SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE reference=?").run(orderId);
+      })();
+      io.emit('balance_updated', { user_id: req.user.id });
+      const newBalance = db.prepare('SELECT balance FROM users WHERE id=?').get(req.user.id).balance;
+      res.json({ ok: true, message: `$${paid.toFixed(2)} credited to your account!`, balance: newBalance });
+    } else {
+      res.status(400).json({ error: `Payment not completed (status: ${data.status})` });
+    }
+  } catch (err) {
+    console.error('[PayPal] capture error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Capture failed. Contact support if payment was taken.' });
+  }
+});
+
+// Webhook (for server-side confirmation backup)
+app.post('/api/payment/paypal/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  res.sendStatus(200);
+  try {
+    const event = JSON.parse(req.body.toString());
+    if (event.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
+      const capture = event.resource;
+      const userId  = parseInt(capture.custom_id || capture.purchase_units?.[0]?.custom_id);
+      const paid    = parseFloat(capture.amount?.value || 0);
+      const orderId = capture.supplementary_data?.related_ids?.order_id;
+      if (!userId || !paid) return;
+      const topup = orderId
+        ? db.prepare("SELECT * FROM topup_requests WHERE reference=? AND status='pending'").get(orderId)
+        : null;
+      if (topup) {
+        db.transaction(() => {
+          db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(paid, userId);
+          db.prepare("UPDATE topup_requests SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE reference=?").run(orderId);
+        })();
+        io.emit('balance_updated', { user_id: userId });
+        console.log(`[PayPal webhook] $${paid} credited to user ${userId}`);
+      }
+    }
+  } catch (e) { console.error('[PayPal webhook] parse error:', e.message); }
 });
 
 // ─── Elbroos GSM API Integration ─────────────────────────────────────────────

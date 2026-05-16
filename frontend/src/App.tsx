@@ -329,7 +329,7 @@ const App: React.FC = () => {
   const [topupAmount, setTopupAmount] = useState('');
   const [topupRef, setTopupRef] = useState('');
   const [topupStep, setTopupStep] = useState<'amount' | 'method' | 'pay' | 'done'>('amount');
-  const [topupMethod, setTopupMethod] = useState<'payoneer' | 'wipay'>('wipay');
+  const [topupMethod, setTopupMethod] = useState<'payoneer' | 'wipay' | 'paypal'>('paypal');
   const [topupLoading, setTopupLoading] = useState(false);
   const [_topupRequests, setTopupRequests] = useState<any[]>([]);
   const [adminTopups, setAdminTopups] = useState<any[]>([]);
@@ -385,6 +385,35 @@ const App: React.FC = () => {
       } else {
         showToast('Card payment was not completed. Please try again.', 'error');
       }
+    }
+  }, []);
+
+  // PayPal return handler
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paypal = params.get('paypal');
+    const token  = params.get('token'); // PayPal order ID
+    if (!paypal) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    if (paypal === 'success' && token) {
+      showToast('PayPal approved! Confirming payment...', 'info');
+      setTimeout(async () => {
+        try {
+          const t = localStorage.getItem('token');
+          if (!t) return;
+          const res = await axios.post(`${API_URL}/api/payment/paypal/capture-order`,
+            { orderId: token },
+            { headers: { Authorization: `Bearer ${t}` } });
+          if (res.data.ok) {
+            showToast(res.data.message || 'Balance topped up!', 'success');
+            setUser((u: any) => u ? { ...u, balance: res.data.balance } : u);
+          }
+        } catch (err: any) {
+          showToast(err.response?.data?.error || 'Payment confirmed — refresh to see balance.', 'info');
+        }
+      }, 1500);
+    } else if (paypal === 'cancel') {
+      showToast('PayPal payment cancelled.', 'error');
     }
   }, []);
 
@@ -1468,7 +1497,7 @@ const App: React.FC = () => {
                     </div>
                     <button className="tool-btn accent" style={{ height: '2.2rem', padding: '0 1rem', flexShrink: 0 }}
                       onClick={async () => {
-                        showToast('Auto-mapping from UnlockBase…', 'loading');
+                        showToast('Auto-mapping from UnlockBase…', 'info');
                         try {
                           const r = await api.post('/admin/unlockbase/auto-map');
                           showToast(`✅ ${r.data.matched} services mapped from ${r.data.ub_services} UB services`, 'success');
@@ -1984,6 +2013,19 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* PayPal */}
+              <div onClick={() => setTopupMethod('paypal')}
+                style={{ border: `2px solid ${topupMethod === 'paypal' ? '#0070ba' : 'var(--border)'}`, borderRadius: 12, padding: '1rem 1.25rem', marginBottom: '0.75rem', cursor: 'pointer', textAlign: 'left', background: topupMethod === 'paypal' ? 'rgba(0,112,186,0.08)' : 'transparent', transition: 'all 0.15s' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.5rem' }}>🅿️</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>PayPal</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Pay instantly with PayPal — USD · Auto-credited</div>
+                  </div>
+                  {topupMethod === 'paypal' && <span style={{ marginLeft: 'auto', color: '#0070ba', fontSize: '1.1rem' }}>✓</span>}
+                </div>
+              </div>
+
               {/* Payoneer */}
               <div onClick={() => setTopupMethod('payoneer')}
                 style={{ border: `2px solid ${topupMethod === 'payoneer' ? '#6366f1' : 'var(--border)'}`, borderRadius: 12, padding: '1rem 1.25rem', marginBottom: '1.25rem', cursor: 'pointer', textAlign: 'left', background: topupMethod === 'payoneer' ? 'rgba(99,102,241,0.08)' : 'transparent', transition: 'all 0.15s' }}>
@@ -1997,23 +2039,27 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <button className="tool-btn accent" style={{ width: '100%', height: '3rem' }}
+              <button className="tool-btn accent" style={{ width: '100%', height: '3rem', background: topupMethod === 'paypal' ? '#0070ba' : undefined }}
                 disabled={topupLoading}
                 onClick={async () => {
-                  if (topupMethod === 'wipay') {
-                    setTopupLoading(true);
-                    try {
+                  setTopupLoading(true);
+                  try {
+                    if (topupMethod === 'wipay') {
                       const res = await api.post('/payment/wipay/initiate', { amount: parseFloat(topupAmount) });
                       window.location.href = res.data.payment_url;
-                    } catch (err: any) {
-                      showToast(err.response?.data?.error || 'Card payment unavailable. Try Payoneer.', 'error');
+                    } else if (topupMethod === 'paypal') {
+                      const res = await api.post('/payment/paypal/create-order', { amount: parseFloat(topupAmount) });
+                      window.location.href = res.data.approvalUrl;
+                    } else {
+                      setTopupStep('pay');
                       setTopupLoading(false);
                     }
-                  } else {
-                    setTopupStep('pay');
+                  } catch (err: any) {
+                    showToast(err.response?.data?.error || 'Payment unavailable. Try another method.', 'error');
+                    setTopupLoading(false);
                   }
                 }}>
-                {topupLoading ? <div className="spinner" /> : topupMethod === 'wipay' ? '💳 Pay by Card →' : '🏦 Continue with Payoneer →'}
+                {topupLoading ? <div className="spinner" /> : topupMethod === 'wipay' ? '💳 Pay by Card →' : topupMethod === 'paypal' ? '🅿️ Pay with PayPal →' : '🏦 Continue with Payoneer →'}
               </button>
               <button className="tool-btn" style={{ width: '100%', marginTop: '0.5rem', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }} onClick={() => setTopupStep('amount')}>← Back</button>
             </>)}
