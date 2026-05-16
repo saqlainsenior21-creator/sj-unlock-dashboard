@@ -431,14 +431,14 @@ async function runIMEICheck(imei) {
       // Some Apple results use pipe-separated: "Apple | iPhone 13 | Blue | 256GB"
       function parseSickwBrand(raw) {
         if (!raw) return {};
-        // Strip any residual HTML tags
-        const clean = raw.replace(/<[^>]+>/g, '\n').replace(/\n+/g, '\n').trim();
-        // If pipe-separated (old format or some services)
+        // Strip HTML tags, normalise line breaks
+        const clean = raw.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/\n+/g, '\n').trim();
+        // Pipe-separated format: "Apple | iPhone 13 | Blue | 256GB"
         if (raw.includes('|') && !raw.includes(':')) {
           const parts = raw.split('|').map(s => s.trim());
           return { brand: parts[0], deviceName: parts[1], color: parts[2], storage: parts[3] };
         }
-        // Parse "Key: Value" lines
+        // Parse all "Key: Value" lines into a map
         const map = {};
         clean.split('\n').forEach(line => {
           const idx = line.indexOf(':');
@@ -448,13 +448,41 @@ async function runIMEICheck(imei) {
             if (v) map[k] = v;
           }
         });
+        // "Description: IPHONE 14,NAMM,128GB,MIDNIGHT" → parse comma parts
+        let descBrand = null, descModel = null, descStorage = null, descColor = null, descCarrier = null;
+        const descRaw = map['description'] || '';
+        if (descRaw) {
+          const parts = descRaw.split(',').map(s => s.trim());
+          // parts[0] = model name, parts[1] = carrier/variant, parts[2] = storage, parts[3] = color
+          if (parts.length >= 2) {
+            descModel   = parts[0] ? parts[0].charAt(0) + parts[0].slice(1).toLowerCase() : null;
+            descCarrier = parts[1] || null;
+            descStorage = parts[2] || null;
+            descColor   = parts[3] ? parts[3].charAt(0) + parts[3].slice(1).toLowerCase() : null;
+          }
+          // Detect brand from model name
+          const upper = (parts[0] || '').toUpperCase();
+          if (upper.includes('IPHONE') || upper.includes('IPAD') || upper.includes('MACBOOK') || upper.includes('APPLE')) descBrand = 'Apple';
+          else if (upper.includes('SAMSUNG') || upper.includes('GALAXY')) descBrand = 'Samsung';
+          else if (upper.includes('GOOGLE') || upper.includes('PIXEL')) descBrand = 'Google';
+          else if (upper.includes('HUAWEI')) descBrand = 'Huawei';
+          else if (upper.includes('XIAOMI') || upper.includes('REDMI')) descBrand = 'Xiaomi';
+          else if (upper.includes('OPPO')) descBrand = 'OPPO';
+          else if (upper.includes('LG')) descBrand = 'LG';
+          else if (upper.includes('MOTOROLA') || upper.includes('MOTO')) descBrand = 'Motorola';
+          else if (upper.includes('NOKIA')) descBrand = 'Nokia';
+          else if (upper.includes('SONY')) descBrand = 'Sony';
+          else if (upper.includes('ONEPLUS')) descBrand = 'OnePlus';
+        }
         return {
-          brand:      map['manufacturer'] || map['brand']      || null,
-          deviceName: map['model_name']   || map['model_code'] || map['manufacturer'] || raw,
-          modelCode:  map['model_code']   || null,
-          color:      map['color']        || null,
-          storage:    map['storage']      || map['capacity']   || null,
-          imei:       map['imei']         || null,
+          brand:      map['manufacturer'] || map['brand'] || descBrand || null,
+          deviceName: map['model_name']   || map['model'] || descModel || map['model_code'] || null,
+          modelCode:  map['model_code']   || map['model_number'] || null,
+          color:      map['color']        || descColor   || null,
+          storage:    map['storage']      || map['capacity'] || descStorage || null,
+          carrier:    map['carrier']      || map['network'] || descCarrier || null,
+          country:    map['country']      || map['region'] || null,
+          imei2:      map['imei2']        || null,
           _raw_keys:  map,
         };
       }
@@ -471,10 +499,13 @@ async function runIMEICheck(imei) {
         modelCode:       parsed.modelCode  || null,
         color:           parsed.color      || null,
         storage:         parsed.storage    || null,
+        carrier:         parsed.carrier    || null,
+        country:         parsed.country    || null,
+        imei2:           parsed.imei2      || null,
         icloudStatus:    icloudStatus,
         simLock:         simLockStatus,
-        blacklistStatus: null,   // needs separate paid service
-        network:         null,   // needs service 103 ($0.06)
+        blacklistStatus: null,
+        network:         null,
       };
 
       console.log(`[SICKW] ${imei} → ${parsed.brand} ${parsed.deviceName} | iCloud: ${icloudStatus} | SIM: ${simLockStatus}`);

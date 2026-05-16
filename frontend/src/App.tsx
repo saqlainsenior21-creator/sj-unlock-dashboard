@@ -1779,7 +1779,7 @@ const App: React.FC = () => {
                       <div className="imei-result-header">
                         <CheckCircle size={22} color="#10b981" />
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>{props?.deviceName || props?.name || props?.modelName || 'Device Found'}</div>
+                          <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>{props?.deviceName || props?.name || props?.modelName || props?.model || 'Device Found'}</div>
                           <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                             IMEI: <span style={{ fontFamily: 'monospace', letterSpacing: 1 }}>{imeiCheckInput}</span>
                           </div>
@@ -1790,14 +1790,16 @@ const App: React.FC = () => {
                       </div>
                       <div className="imei-result-grid">
                         {[
-                          { label: 'MODEL', value: props?.modelNumber || props?.model || '—' },
-                          { label: 'BRAND', value: props?.brand || props?.manufacturer || '—' },
-                          { label: 'CARRIER', value: props?.network || props?.carrier || props?.simNetwork || '—' },
-                          { label: 'COUNTRY', value: props?.country || props?.purchaseCountry || '—' },
-                          { label: 'SIM LOCK', value: isLocked ? 'LOCKED' : 'UNLOCKED', color: isLocked ? 'var(--danger)' : 'var(--success)' },
+                          { label: 'MODEL',     value: props?.deviceName || props?.modelNumber || props?.model || props?.modelName || '—' },
+                          { label: 'BRAND',     value: props?.brand || props?.manufacturer || '—' },
+                          { label: 'STORAGE',   value: props?.storage || props?.capacity || '—' },
+                          { label: 'COLOR',     value: props?.color || '—' },
+                          { label: 'CARRIER',   value: props?.carrier || props?.network || props?.simNetwork || '—' },
+                          { label: 'COUNTRY',   value: props?.country || props?.purchaseCountry || props?.region || '—' },
+                          { label: 'SIM LOCK',  value: isLocked ? 'LOCKED 🔒' : 'UNLOCKED ✓', color: isLocked ? 'var(--danger)' : 'var(--success)' },
                           { label: 'BLACKLIST', value: isBlacklisted ? 'BLACKLISTED ⚠' : 'CLEAN ✓', color: isBlacklisted ? 'var(--danger)' : 'var(--success)' },
-                          { label: 'STORAGE', value: props?.storage || props?.capacity || '—' },
-                          { label: 'COLOR', value: props?.color || '—' },
+                          ...(props?.icloudStatus ? [{ label: 'iCLOUD', value: props.icloudStatus.replace(/iCloud Activation Lock:\s*/i, '').replace(/iCloud:\s*/i, '') || '—', color: String(props.icloudStatus).toUpperCase().includes('ON') || String(props.icloudStatus).toUpperCase().includes('LOCKED') ? 'var(--danger)' : 'var(--success)' }] : []),
+                          ...(props?.imei2 ? [{ label: 'IMEI 2', value: props.imei2 }] : []),
                         ].map(item => (
                           <div key={item.label} className="imei-result-item">
                             <div className="imei-result-label">{item.label}</div>
